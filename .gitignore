@@ -177,3 +177,6 @@ rsconnect/
 dev/outputs/
 dev/output/
 .DS_Store
+
+# Browser smoke output (tests/e2e/smoke.R)
+tests/e2e/out/

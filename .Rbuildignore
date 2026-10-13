@@ -24,3 +24,4 @@
 ^docs$
 ^\.github$
 ^\.lintr$
+^tests/e2e$
