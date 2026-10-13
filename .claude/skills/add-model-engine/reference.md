@@ -1,204 +1,186 @@
-# Reference: File-by-File Integration Points
+# Reference: engine contracts and integration points
 
-## R/fct_fit_model.R — Engine Registry & Fitting
+Verified against the code on 2026-10-13. Locate things by function name or the
+grep landmark, not by line number.
 
-**ENGINE_REGISTRY** (top of file, before `fit_model()`):
-Currently contains engines: `fixest`, `ranger`, `xgboost`, `rif`.
+## `ENGINE_REGISTRY` (R/fct_fit_model.R)
 
-Each entry's function signatures:
+Engines today: `fixest`, `ranger`, `xgboost`, `rif`.
+
+| Field | Signature / type | Notes |
+|---|---|---|
+| `requires` | character vector | Checked with `requireNamespace()` in `fit_model()` before anything else. |
+| `model_types` | character vector | Must match `selected_model$type` strings exactly. |
+| `build_formulas` | `function(y_var, terms, fe_vars)` | Returns `list(formula1, formula2, formula3)`. `terms` has `$hazard`, `$interactions_main`, `$covariates`. `fixest` puts FE after `\|`; `ranger`/`xgboost` add FE as ordinary features; `rif` returns RHS strings. |
+| `fit_one` | `function(formula, data, model_type, model_spec, opts)` | Called three times. `opts$fixest` (cluster) and `opts$rif` (`taus`, `rif_cols`) are the existing option slots. |
+| `make_spec` | `function(model_type, use_logit, seed = WISEAPP_DEFAULT_SEED)` | parsnip spec, or `NULL` for non-parsnip engines. Must be seeded and single-threaded. |
+| `prepare_outcome` | `function(df, y_var, use_logit)` | Runs after the complete-case filter. May add columns and set attributes (`rif_taus`, `rif_cols`). |
+
+### `fit_model()` flow (what you get for free)
+
+Landmarks: `engine_key <- tolower(selected_model$engine %||% "fixest")`,
+`backend <- ENGINE_REGISTRY[[engine_key]]`.
+
+1. Unknown engine key stops with the list of registered engines.
+2. Missing `requires` packages stop with the package names.
+3. `selected_model$type` must be in `backend$model_types`.
+4. Logistic request on a non-logical or non-0/1 outcome falls back to linear
+   with a warning and a `fallbacks` record (`kind = "model_family"`).
+5. Weather, polynomial and interaction terms are built (pairwise or saturated).
+6. Cluster variables missing from the data fall back to an unclustered fit with
+   a `fallbacks` record (`kind = "vcv"`); present ones join the complete-case
+   filter.
+7. `df <- df[stats::complete.cases(...), ]`: `train_data` has fewer rows than
+   the survey frame. Use `svy`, not `train_data`, when matching simulation data.
+8. `backend$prepare_outcome()`, then `backend$make_spec(model_type, use_logit,
+   seed = seed)`.
+9. `engine_opts`: `fixest` clustering, plus `rif` when `rif_taus` is set.
+10. Three `fit_one()` calls, each wrapped so a failure reports which spec failed.
+11. Slimming (`.slim_fit()`, `fixest` and `fixest_multi` only: drops the embedded
+    `data` from `$call` and `$scores`) and `.cache_mm()` (stores the fit3 design
+    matrix in attribute `wise_mm` before slimming; `model.matrix()` does not
+    survive slimming). Non-fixest fits are returned unslimmed.
+12. `build_rif_grid()` for RIF only.
+
+### Return structure
 
 ```r
-build_formulas = function(y_var, terms, fe_vars)
-# y_var: outcome column name
-# terms: list with $hazard, $interactions_main, $covariates
-# fe_vars: character vector of fixed-effect variables
-# Returns: list(formula1, formula2, formula3)
-
-fit_one = function(formula, data, model_type, model_spec, opts)
-# formula: from build_formulas (formula object or RHS string)
-# data: training data with outcome + predictors
-# model_type: e.g., "linear", "logistic"
-# model_spec: from make_spec() (parsnip spec or NULL)
-# opts: list with engine-specific options (e.g., opts$fixest for clustering)
-# Returns: fitted model object
-
-make_spec = function(model_type, use_logit)
-# Returns: parsnip model_spec or NULL
-
-prepare_outcome = function(df, y_var, use_logit)
-# Coerce/transform outcome column as needed
-# Returns: modified data frame (may add columns, e.g., RIF columns)
-# May set attributes on df (e.g., attr(df, "rif_taus"))
+list(
+  fit1, fit2, fit3,            # weather / + FE / + FE + controls
+  weather_terms, interaction_terms, fe_terms,
+  y_var, model_type,           # "linear" or "logistic"
+  engine,                      # registry key
+  train_data,                  # after complete.cases()
+  formulas,
+  rif_grid, taus,              # NULL unless RIF
+  fallbacks                    # list of specification fallbacks applied
+)
 ```
 
-**fit_model() key locations** (search for these landmarks):
-- `engine_key <- tolower(...)` — engine key lookup
-- `backend$prepare_outcome(...)` — outcome preparation
-- `rif_taus <- attr(df, "rif_taus")` — attribute extraction after prepare_outcome
-- `backend$build_formulas(...)` — formula construction
-- `df <- df[complete.cases(...)` — **filters rows!** train_data will have fewer rows than svy
-- `engine_opts$rif <- ...` — engine-specific option injection
-- `backend$fit_one(...)` — fitting call (called 3 times for fit1/fit2/fit3)
-- The final `list(fit1 = ..., engine = engine_key, ...)` — return structure
+`step2_slim_model_fit()` (fct_step2_compute.R) keeps only: `engine`,
+`weather_terms`, `interaction_terms`, `fe_terms`, `fit3`, `formulas`,
+`train_data`, `y_var`, `model_type`, `taus`, `rif_grid`, `fallbacks`, `.sig`,
+and `.snap$model`. New fields that Step 2 needs must be added there (a
+protected file: deliberate edit and test).
 
----
+## Selection (R/fct_model_select.R)
 
-## R/fct_model_select.R — Model Type → Engine Mapping
+- `infer_engine(model_type)`: `switch()` from model-type string to key. Falls
+  back to `"fixest"` for unknown strings. Currently maps Linear and Logistic
+  to `fixest`, `"Random forest"` to `ranger`, `"XGBoost"` to `xgboost`, and
+  `"Unconditional quantile regression (RIF)"` to `rif`.
+- `model_type_choices(outcome_type)`: what the Step 1 UI offers. Logical
+  outcome: Logistic, Linear. Numeric: Linear, RIF. `Random forest` and
+  `XGBoost` are not offered.
+- `build_selected_model(...)`: `engine` defaults to `infer_engine(model_type)`.
+- `mod_1_06_model.R` renders `model_type_choices()` as a pill toggle and builds
+  the spec with `build_selected_model()`; check it if the new type needs extra
+  inputs.
 
-**infer_engine()** — `switch()` block mapping model type strings to engine keys:
-```r
-"Linear regression"  → "fixest"
-"Logistic regression" → "fixest"
-"Random forest"       → "ranger"
-"XGBoost"             → "xgboost"
-"Quantile regression" → "rif"
-```
+## Prediction (R/fct_predict_outcomes.R)
 
-**model_type_choices()** — returns choices based on `outcome_type`:
-- `"logical"`: Logistic, Linear
-- `"numeric"` (default): Linear, Quantile regression
+`predict_outcome(model, newdata, type, residuals, id, outcome, train_data,
+engine, seed)`:
 
----
+- Detection: `is_fixest` (class `fixest` or `engine == "fixest"`), then
+  `is_parsnip` (class `model_fit`), else bare `lm`/`glm`.
+- Fitted values: `stats::predict(..., type = "response")` for `fixest` (checks
+  row alignment; NA predictions pass through), `broom::augment(new_data = )`
+  for parsnip (resolves `.pred` / `.pred_1`), `broom::augment(newdata = )` for
+  bare models.
+- Residual options: `"none"`, `"original"`, `"normal"`, `"resample"`. Residuals
+  other than `"none"` need `train_data`.
+- Output: data frame with `.fitted`, a residual draw (or NA) and the outcome
+  column.
+- The roxygen for `engine` lists `lm_glm` and `fixest`; update it if you add a
+  branch.
 
-## R/fct_predict_outcomes.R — Prediction Dispatch
+## Results and diagnostics
 
-**predict_outcome()** signature:
-```r
-predict_outcome(model, newdata, type, residuals, id, outcome, train_data, engine)
-```
+Engine branches (find with `grep -rnE 'identical\(.*engine, "rif"\)|engine == "rif"' R`):
 
-**Engine detection** (near top of function body):
-```r
-is_fixest  <- inherits(model, "fixest") || identical(engine, "fixest")
-is_parsnip <- !is_fixest && inherits(model, "model_fit")
-# fallback: bare lm/glm
-```
+| File | Functions |
+|---|---|
+| `fct_results.R` | `extract_native_fit()` (unwraps parsnip to the native fit), `extract_rif_median()`, `make_regtable_df()`, `calc_fit_stats()`, `echart_make_coefplot()`, `echart_weather_effect_plot()` |
+| `fct_results_table2.R` | `make_regtable_specs_df()`, `make_regtable_focused_df()` and the two reactable builders |
+| `fct_step1_headline.R` | `.s1_engine()` (maps `ranger`/`xgboost` to `"ml"`) and the headline cards |
+| `mod_1_07_results.R` | RIF labels, popovers, conditional UI |
+| `mod_1_08_modelfit.R` | diagnostics unwrapping and the RIF welfare-quantile plot |
+| `fct_model_card.R` | `model_badge()` engine label |
 
-**Prediction branches** (in the "Compute fitted values" section):
-- fixest: `stats::predict(model, newdata, type = "response")`
-- parsnip: `broom::augment(model, new_data = newdata)`
-- bare lm/glm: `broom::augment(model, newdata = newdata)`
+Generic and usually engine-free: `echart_residual_panels()`,
+`echart_pred_vs_actual()`, `echart_importance()`. Confirm each with the new
+fit class.
 
-**Residual branches** (in the "Compute residuals" section):
-- fixest: `stats::residuals(model, type = ...)` + `stats::predict(model, newdata = train_data)`
-- parsnip: `broom::augment(model, new_data = train_data)`
-- bare: `broom::augment(model, data = train_data)`
+Charts are echarts (`echart_*`); the ggplot builders remain as static, export
+and test references. Tables are `reactable` with a client-side CSV download.
+Follow `review/optimization_guidelines.md` sections 6 and 7 for any new
+figure or table.
 
-**Output contract** — must produce data frame with:
-- `.fitted` (numeric): predicted values
-- `.residual` (numeric or NA): residual draw
-- `<outcome>` (numeric): `.fitted + residual_draw`
+## Step 2 (simulation)
 
----
+- `mod_2_01_weathersim.R`: `output$run_sim_ui` allow-list is
+  `c("fixest", "rif")`; others get the "not yet implemented" notice. The run
+  observer reads `mf$engine` and derives `is_rif`.
+- `fct_simulations.R`: `run_sim_pipeline()` defines `is_rif` from the engine
+  plus `fit_multi`, `taus`, `weather_cols`; `compute_chol_vcov()` requires a
+  `fixest` fit (or `fixest_multi` for RIF).
+- `fct_run_simulation.R`: reference numerics (protected). The default branch
+  uses `model$fitted.values` for `fixest` and `predict()` otherwise.
+- `fct_step2_compute.R`: pure serial compute boundary and `step2_slim_model_fit()`.
+- `fct_step2_async.R`: process-wide mirai coordinator (protected). The worker
+  loads the package; engine packages must be installed there.
 
-## R/fct_results.R — Results Functions
+Residual controls: if residuals do not apply to the engine, disable or hide
+the residual choice in `mod_2_01_weathersim.R` and force `"none"` rather than
+silently ignoring it.
 
-All results functions receive `engine` as a parameter from mod_1_07_results.R.
+## Step 3 (policy)
 
-**Engine-branching functions** (search for `identical(engine, "rif")`):
+- `fct_policy_sim.R`: annual policy correction stops unless the engine is
+  `rif` or `fixest`.
+- `fct_policy_decompose.R`: engine gates and RIF-specific repositioning.
+- `fct_policy_metric_decompose.R`: `.policy_annual_channel_status()` returns
+  `unsupported` for other engines or non-identity/log outcome transforms.
+- `fct_step3_async.R`: RIF-specific `F_hat_pre` handling.
+- `mod_3_09_decomposition.R`: derives the engine for the decomposition pane.
+- `fct_metric_registry.R`: each metric has `engines` (default `c("ols", "rif")`)
+  and `uncertainty` (default coefficient, weather, ensemble). These are
+  metadata strings used by the UI; they are not the registry keys.
 
-| Function | Branch pattern |
-|----------|---------------|
-| `make_coefplot()` | `if (identical(engine, "rif") && !is.null(rif_grid))` |
-| `make_weather_effect_plot()` | `if (identical(engine, "rif") && !is.null(rif_grid))` |
-| `make_regtable()` | `if (identical(engine, "rif") && !is.null(rif_grid))` |
-| `calc_fit_stats()` | `if (identical(engine, "rif") && ...)` |
+Policy decomposition is Total = Main + Resilience (Repositioning +
+Interaction). Do not reuse the RIF or fixest definition for another engine
+without a derivation and tests.
 
-**Functions that work generically (no engine branching needed):**
-- `plot_diagnostics()` — residuals vs fitted
-- `plot_resid_weather()` — residuals vs weather variable
-- `plot_pred_vs_actual()` — predicted vs actual distribution
-- `plot_relaimpo()` — relative importance via coefficient magnitudes
+## Provenance and export
 
----
+`fct_provenance.R` records `engine` in the immutable run record and the
+selected-model summary; `fct_export.R` writes it into the metadata table.
+Check both with the new key.
 
-## R/mod_1_07_results.R — Results UI Wiring
+## Tests to model on
 
-- `extract_native_fit(fit, mf$engine)` — unwraps native model from parsnip wrapper
-- `engine = mf$engine` passed to all plot/table functions
-- `is_rif <- identical(mf$engine, "rif")` — controls conditional UI labels (e.g., "UQR coefficients" vs "Coefficients")
+| Concern | File |
+|---|---|
+| Fit, fallbacks | `test-fct_fit_model.R`, `test-fct_fit_model_fallback.R` |
+| Determinism, single thread | `test-determinism.R` (ranger and xgboost cases) |
+| Prediction | `test-fct_predict_outcomes.R` |
+| Model card badge | `test-fct_model_card.R` |
+| Slim snapshot | `test-step2-slim-model-fit.R` |
+| Step 2 contracts | `test-step2-compute.R`, `test-step2-contract.R`, `test-step2-payload.R` |
+| Step 3 unsupported engines | `test-fct-policy-metric-decompose.R`, `test-policy-central-kernel.R` |
+| Packaging | `test-deploy-contract.R` (Suggests-only engine packages) |
+| Results | `test-fct_results.R`, `test-fct-results-fitdiagnostics.R`, `test-fct_step1_headline.R`, `test-mod_1_07_results.R`, `test-mod_1_08_modelfit.R` |
 
----
+## Passing engine data through the pipeline (Tier B)
 
-## R/mod_1_08_modelfit.R — Diagnostics UI Wiring
+If an engine needs more than `model` and `engine` downstream (RIF carries
+`rif_grid`, `taus`, and a stacked `fit_multi`):
 
-- `extract_native_fit()` / `extract_rif_median()` — for RIF, returns tau=0.5 sub-model for diagnostics
-- RIF-specific `pred_welf_dist` plot (quantile markers instead of standard predicted-vs-actual)
-- `calc_fit_stats(model, is_logistic, engine = ...)` — engine passed for RIF branching
-- Model summary header varies by engine
-
----
-
-## R/fct_simulations.R — Simulation Pipeline
-
-**run_sim_pipeline()** signature:
-```r
-run_sim_pipeline(weather_raw, svy, sw, so,
-                 model, residuals, train_data, engine,
-                 slim = FALSE,
-                 # Engine-specific optional params (e.g., RIF):
-                 fit_multi = NULL, taus = NULL, weather_cols = NULL)
-```
-
-Flow:
-1. `prepare_hist_weather()` — inner-joins weather to survey on (code, year, survname, loc_id, int_month). **Drops** weather and outcome columns from survey side before joining.
-2. `predict_outcome()` or engine-specific predict (e.g., `predict_rif()`)
-3. `apply_log_backtransform()` — exponentiates if `so$transform == "log"`
-4. Slim trimming (future scenarios only)
-
----
-
-## R/fct_policy_sim.R — Policy Pipeline
-
-**apply_policy_to_svy()**: Modifies covariate columns. Engine-agnostic.
-
-**run_policy_pipeline()**: Re-runs `run_sim_pipeline()` on modified covariates
-for historical + each future scenario. Has **3 internal call sites** to
-`run_sim_pipeline()` — all must forward engine-specific params:
-1. Historical simulation
-2. Per-ensemble-model loop (future scenarios with `model` column)
-3. Single-pass fallback (future scenarios without `model` column)
-
----
-
-## R/mod_2_01_weathersim.R — Simulation Module Server
-
-Inside `observeEvent(input$run_sim, ...)`:
-- Extracts `model`, `engine`, `train_data` from `model_fit()`
-- Calls `run_sim_pipeline()` per weather key in a loop
-- Residual radio buttons rendered via `renderUI` (conditional on engine)
-
----
-
-## R/mod_3_05_policy_sim.R — Policy Module Server
-
-Inside `observeEvent(input$run_sim, ...)`:
-- `apply_policy_to_svy()` call
-- `run_policy_pipeline()` call — passes model, engine, train_data + engine-specific params
-
----
-
-## Common Patterns
-
-**Engine detection in downstream code:**
-```r
-# By engine string (preferred for dispatch):
-if (identical(engine, "myengine")) { ... }
-
-# By model class (for predict_outcome):
-is_myengine <- inherits(model, "my_model_class")
-```
-
-**Passing engine-specific data through the pipeline:**
-If your engine needs extra data beyond `model` (like RIF needs `fit_multi`,
-`taus`, `weather_cols`):
-1. Store it in the `fit_model()` return list
-2. Extract it in the module server (mod_2_01, mod_3_05)
-3. Add optional params to `run_sim_pipeline()` and `run_policy_pipeline()`
-4. Forward them through all 3 internal `run_sim_pipeline()` calls in `run_policy_pipeline()`
-
-**Residual handling:**
-If residuals don't apply to your engine (e.g., quantile regression, Bayesian):
-- Force `residuals = "none"` in the module server
-- Conditionally render a UI note instead of the radio buttons via `renderUI`
-- Set `.residual = NA_real_` in the prediction output
+1. Return it from `fit_model()` and keep it in `step2_slim_model_fit()`.
+2. Read it in the module server that starts the run, and add it to the
+   snapshot that goes to the worker.
+3. Thread it through `run_sim_pipeline()` and the policy pipeline call sites;
+   `grep -n 'run_sim_pipeline(' R` to find every call, because a missed call
+   site silently drops the engine data.
+4. Add a determinism and parity test before benchmarking.
