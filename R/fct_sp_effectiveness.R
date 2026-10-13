@@ -178,6 +178,21 @@ sp_effectiveness <- function(baseline_svy, policy_svy, poverty_line = NULL,
 # extreme number, never a finding (decision 3).
 SP_CE_MIN_EFFECT <- 1e-4
 
+# People each survey row stands for: the survey weight, or the household size
+# for unweighted household rows, else 1 (see `.sp_ce_population()`).
+.sp_ce_population_weights <- function(svy, analysis_unit = "hh") {
+  n <- nrow(svy)
+  w <- if ("weight" %in% names(svy)) {
+    suppressWarnings(as.numeric(svy$weight))
+  } else if (identical(analysis_unit, "hh") && "hhsize" %in% names(svy)) {
+    suppressWarnings(as.numeric(svy$hhsize))
+  } else {
+    rep(1, n)
+  }
+  w[!is.finite(w) | w < 0] <- 0
+  w
+}
+
 #' People represented by a survey frame
 #'
 #' The denominator of "people lifted": the sum of survey weights, or, for

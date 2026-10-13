@@ -501,9 +501,13 @@ sp_shock_pipeline_state <- function(plan, pipeline, exposure) {
 #' @param exposure Resolved exposure of that pipeline.
 #' @param state Result of `sp_shock_pipeline_state()`.
 #' @param transfer Result of `sp_shock_pipeline_transfer()` (stored scale).
-#' @return Data frame, see above.
+#' @param transfer_model The same transfer on the outcome's level scale, for the
+#'   `"reach"` attribute (per-survey-row loss-event counts, see
+#'   `sp_shock_reach()`); defaults to `transfer`.
+#' @return Data frame, see above, with attributes `cells` and `reach`.
 #' @keywords internal
-sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer) {
+sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer,
+                                   transfer_model = NULL) {
   annual <- sp_shock_annual(
     transfer, pipeline, plan$cost_frame, state, plan$analysis_unit,
     plan$currency, plan$admin_share
@@ -535,7 +539,100 @@ sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer) {
   annual[cols] <- basis[match(as.character(annual$sim_year), rownames(basis)), cols]
   annual[cols] <- lapply(annual[cols], function(x) ifelse(is.na(x), 0, x))
   attr(annual, "cells") <- cells
+  attr(annual, "reach") <- .sp_shock_reach_rows(
+    plan, pipeline, level, ref, rel, ok, transfer_model %||% transfer
+  )
   annual
+}
+
+# Per survey row, over the pipeline's years: household-years with a loss event
+# (modelled loss of at least `loss_event_pct` of the household's own typical
+# level), those among them in which the household was paid, the summed loss and
+# the summed payment in those years. Line-free, so coverage and adequacy of the
+# shock-affected poor can be evaluated at any poverty line afterwards
+# (`sp_shock_reach()`). `transfer` is on the outcome's level scale, like `level`.
+.sp_shock_reach_rows <- function(plan, pipeline, level, ref, rel, ok, transfer) {
+  ids <- as.integer(pipeline$svy_row_id)
+  event <- ok & rel <= -plan$loss_event_pct / 100
+  if (!any(event)) {
+    return(matrix(0, 0L, 4L, dimnames = list(NULL, .sp_shock_reach_cols)))
+  }
+  paid <- ifelse(is.finite(transfer[event]), transfer[event], 0)
+  m <- cbind(
+    n_event = 1, n_covered = paid > 0,
+    loss = pmax(ref[event] - level[event], 0), paid = paid
+  )
+  rowsum(m, ids[event])
+}
+
+.sp_shock_reach_cols <- c("n_event", "n_covered", "loss", "paid")
+
+# Add one pipeline's sparse reach rows into the per-scenario dense totals
+# (`acc` is a named list of n_svy x 4 matrices).
+.sp_shock_reach_add <- function(acc, scenario, reach, n_svy) {
+  if (is.null(reach) || !nrow(reach)) {
+    return(acc)
+  }
+  cur <- acc[[scenario]] %||% matrix(
+    0, n_svy, length(.sp_shock_reach_cols), dimnames = list(NULL, .sp_shock_reach_cols)
+  )
+  i <- as.integer(rownames(reach))
+  cur[i, ] <- cur[i, , drop = FALSE] + reach
+  acc[[scenario]] <- cur
+  acc
+}
+
+#' Coverage and adequacy of the shock-affected poor
+#'
+#' Over the household-years with a modelled loss event (the run's loss-event
+#' share), for households poor at the baseline: the share that was paid
+#' (coverage) and the payments as a share of the modelled loss (adequacy, in
+#' the outcome's level units). People are weighted by the survey weight. The
+#' poverty line is the display line (plan rule 15), so it can change without a
+#' new run.
+#'
+#' @param reach Named list by scenario of n_svy x 4 matrices (`n_event`,
+#'   `n_covered`, `loss`, `paid`), as published in `shock_summary()$reach`.
+#' @param svy Baseline survey frame (`welfare`, optionally `weight`, `ppp2021`).
+#' @param poverty_line Display poverty line in the entry currency per day.
+#' @param currency `"PPP"` or `"LCU"`.
+#' @param analysis_unit `"hh"`, `"ind"` or `"firm"`.
+#' @return Data frame: `scenario`, `coverage`, `adequacy`, `poor_affected_years`
+#'   (weighted household-years of affected poor), `NA` when nothing qualifies.
+#'   Zero rows without a usable line or reach.
+#' @keywords internal
+sp_shock_reach <- function(reach, svy, poverty_line, currency = "PPP",
+                           analysis_unit = "hh") {
+  empty <- data.frame(
+    scenario = character(), coverage = numeric(), adequacy = numeric(),
+    poor_affected_years = numeric(), stringsAsFactors = FALSE
+  )
+  pl <- suppressWarnings(as.numeric(poverty_line))[1L]
+  if (!is.list(reach) || !length(reach) || !is.data.frame(svy) ||
+    !"welfare" %in% names(svy) || !is.finite(pl) || pl <= 0) {
+    return(empty)
+  }
+  n <- nrow(svy)
+  line <- .povline_to_ppp(rep(pl, n), svy, identical(.sp_currency(currency), "LCU"))
+  welfare <- suppressWarnings(as.numeric(svy$welfare))
+  poor <- is.finite(welfare) & is.finite(line) & welfare < line
+  w <- .sp_ce_population_weights(svy, analysis_unit) * poor
+  out <- lapply(names(reach), function(s) {
+    m <- reach[[s]]
+    if (nrow(m) != n) {
+      return(NULL)
+    }
+    den_n <- sum(w * m[, "n_event"])
+    den_l <- sum(w * m[, "loss"])
+    data.frame(
+      scenario = s,
+      coverage = if (den_n > 0) sum(w * m[, "n_covered"]) / den_n else NA_real_,
+      adequacy = if (den_l > 0) sum(w * m[, "paid"]) / den_l else NA_real_,
+      poor_affected_years = den_n, stringsAsFactors = FALSE
+    )
+  })
+  out <- Filter(Negate(is.null), out)
+  if (!length(out)) empty else do.call(rbind, out)
 }
 
 # Population weights of true and false positives and negatives, and spending,

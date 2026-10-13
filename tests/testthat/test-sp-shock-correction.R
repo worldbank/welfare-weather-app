@@ -223,6 +223,36 @@ test_that("annual cost and activation match a hand calculation", {
   expect_true(is.na(s$cost_1_in_20[1])) # two years cannot support a 1-in-20 cost
 })
 
+test_that("reach counts per survey row match a brute-force calculation (P2-2)", {
+  spec <- shk_spec(trigger_value = 20, loss_event_pct = 10)
+  fx <- shk_fixture("none", spec)
+  out <- shk_run(fx, list(future = list(pipelines = list(m1 = fx$pipeline),
+    year_range = c("2030", "2031"))))
+  p <- fx$pipeline
+  tbl <- p$weather_exposure$table
+  plan <- sp_shock_plan(spec, tbl, fx$shock_policy[[SP_ELIGIBLE_COL]], fx$shock_policy, "hh")
+  transfer <- sp_shock_pipeline_transfer(plan, p, p$weather_exposure)
+  ref <- tapply(p$y_point, p$svy_row_id, mean)[as.character(p$svy_row_id)]
+  event <- (p$y_point / ref - 1) <= -0.10
+  expected <- cbind(
+    n_event = event, n_covered = event & transfer > 0,
+    loss = ifelse(event, pmax(ref - p$y_point, 0), 0), paid = ifelse(event, transfer, 0)
+  )
+  expected <- rowsum(expected, p$svy_row_id)
+  n <- nrow(fx$shock_policy)
+  dense <- matrix(0, n, 4L, dimnames = list(NULL, colnames(expected)))
+  dense[as.integer(rownames(expected)), ] <- expected
+  expect_true(any(dense[, "n_event"] > 0))
+  expect_setequal(names(out$shock$reach), c("Historical", "future"))
+  expect_equal(out$shock$reach$Historical, dense)
+  expect_equal(out$shock$reach$future, dense)
+  expect_equal(out$shock$reach_loss_event_pct, 10)
+  # The reach feeds coverage and adequacy at any display line
+  r <- sp_shock_reach(out$shock$reach, fx$base, poverty_line = 1e6)
+  expect_equal(nrow(r), 2L)
+  expect_true(all(r$coverage >= 0 & r$coverage <= 1))
+})
+
 test_that("basis risk and leakage follow the loss events", {
   for (scope in c("local", "national_all")) {
     spec <- shk_spec(trigger_value = 20, loss_event_pct = 10, payout_scope = scope,

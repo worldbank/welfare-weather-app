@@ -230,3 +230,61 @@ test_that("a shock program reports who can be paid and the cost of a year with p
   expect_false(any(grepl("year with payments|if paid", reg$metrics$metric)))
   expect_match(res$metrics$note[[1L]], "every eligible household is paid")
 })
+
+# Coverage and adequacy of the shock-affected poor ----
+
+test_that("reach rows count loss-event household-years, payments and losses per survey row", {
+  plan <- list(loss_event_pct = 10)
+  pipeline <- list(svy_row_id = c(1L, 1L, 2L, 2L))
+  level <- c(80, 100, 50, 60)
+  ref <- c(100, 100, 60, 60)
+  rel <- level / ref - 1
+  m <- .sp_shock_reach_rows(plan, pipeline, level, ref, rel, rep(TRUE, 4L), c(5, 0, 0, 0))
+  # Loss events: row 1 (-20%) and row 3 (-16.7%); only row 1 was paid
+  expect_equal(unname(m["1", ]), c(1, 1, 20, 5))
+  expect_equal(unname(m["2", ]), c(1, 0, 10, 0))
+  expect_identical(colnames(m), .sp_shock_reach_cols)
+  # An 18% event share leaves only the first
+  strict <- .sp_shock_reach_rows(list(loss_event_pct = 18), pipeline, level, ref, rel,
+    rep(TRUE, 4L), c(5, 0, 0, 0))
+  expect_equal(rownames(strict), "1")
+  # No event gives an empty matrix
+  none <- .sp_shock_reach_rows(plan, pipeline, level, ref, rep(0, 4L), rep(TRUE, 4L), rep(0, 4L))
+  expect_equal(dim(none), c(0L, 4L))
+})
+
+test_that("reach adds up across members and keeps scenarios apart", {
+  a <- matrix(c(1, 1, 20, 5), 1, dimnames = list("2", .sp_shock_reach_cols))
+  acc <- .sp_shock_reach_add(list(), "S", a, 3L)
+  acc <- .sp_shock_reach_add(acc, "S", a, 3L)
+  acc <- .sp_shock_reach_add(acc, "T", a, 3L)
+  expect_equal(unname(acc$S[2, ]), c(2, 2, 40, 10))
+  expect_equal(sum(acc$S[-2, ]), 0)
+  expect_equal(unname(acc$T[2, ]), c(1, 1, 20, 5))
+  expect_identical(.sp_shock_reach_add(acc, "U", NULL, 3L), acc)
+})
+
+test_that("coverage and adequacy of the shock-affected poor follow the display line", {
+  svy <- data.frame(welfare = c(1, 2, 5), weight = c(100, 300, 100))
+  m <- matrix(c(
+    2, 1, 40, 10, # poor, paid in 1 of 2 loss-event years
+    4, 4, 80, 60, # poor, always paid
+    9, 0, 90, 0 # not poor
+  ), 3, byrow = TRUE, dimnames = list(NULL, .sp_shock_reach_cols))
+  out <- sp_shock_reach(list(S = m), svy, poverty_line = 3)
+  # Weighted by people: 100 * 2 + 300 * 4 loss-event years, 100 * 1 + 300 * 4 covered
+  expect_equal(out$coverage, (100 * 1 + 300 * 4) / (100 * 2 + 300 * 4))
+  expect_equal(out$adequacy, (100 * 10 + 300 * 60) / (100 * 40 + 300 * 80))
+  expect_equal(out$poor_affected_years, 1400)
+  # A lower line removes the second household from the poor
+  low <- sp_shock_reach(list(S = m), svy, poverty_line = 1.5)
+  expect_equal(low$coverage, 0.5)
+  expect_equal(low$adequacy, 10 / 40)
+  # No line, no reach, or a mismatched frame give no rows
+  expect_equal(nrow(sp_shock_reach(list(S = m), svy, NULL)), 0L)
+  expect_equal(nrow(sp_shock_reach(NULL, svy, 3)), 0L)
+  expect_equal(nrow(sp_shock_reach(list(S = m[1:2, ]), svy, 3)), 0L)
+  # Nobody poor is affected: not available, not zero
+  rich <- sp_shock_reach(list(S = m), svy, poverty_line = 0.5)
+  expect_true(is.na(rich$coverage) && is.na(rich$adequacy))
+})

@@ -1731,6 +1731,13 @@ apply_policy_delta_to_baseline <- function(svy_baseline,
   parts <- list(hist_result$compact)
   shock_parts <- list(hist_result$shock)
   shock_cell_parts <- list(hist_result$shock_cells)
+  # Per-survey-row loss-event counts by scenario, for coverage and adequacy of
+  # the shock-affected poor at any later poverty line (sp_shock_reach())
+  n_svy_policy <- nrow(svy_policy)
+  shock_reach <- .sp_shock_reach_add(
+    list(), hist_sim_baseline$hist_label %||% "Historical", hist_result$shock_reach,
+    n_svy_policy
+  )
   saved_scenarios_new <- lapply(seq_along(saved_scenarios_baseline), function(i) {
     s <- saved_scenarios_baseline[[i]]
     if (is.null(s) || is.null(s$pipelines)) {
@@ -1750,6 +1757,10 @@ apply_policy_delta_to_baseline <- function(svy_baseline,
       parts[[length(parts) + 1L]] <<- result$compact
       shock_parts[[length(shock_parts) + 1L]] <<- result$shock
       shock_cell_parts[[length(shock_cell_parts) + 1L]] <<- result$shock_cells
+      shock_reach <<- .sp_shock_reach_add(
+        shock_reach, names(saved_scenarios_baseline)[i] %||% paste0("Scenario ", i),
+        result$shock_reach, n_svy_policy
+      )
       result$pipeline
     })
     names(pipes_new) <- names(s$pipelines)
@@ -1781,6 +1792,8 @@ apply_policy_delta_to_baseline <- function(svy_baseline,
       cells = if (length(cells)) do.call(rbind, c(cells, list(make.row.names = FALSE))),
       # Survey rows paid in at least one historical year
       paid_historical = hist_result$shock_paid,
+      # Loss-event share the reach counts were taken at (not rescored)
+      reach = shock_reach, reach_loss_event_pct = annual_channels$shock$loss_event_pct,
       per_household = annual_channels$shock$per_household
     )
   }

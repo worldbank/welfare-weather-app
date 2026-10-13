@@ -25,7 +25,8 @@ mod_3_10_cost_effectiveness_ui <- function(id) {
       shiny::uiOutput(ns("ce_body_ui")),
       shiny::uiOutput(ns("ce_note_ui"))
     ),
-    shiny::uiOutput(ns("climate_ui"))
+    shiny::uiOutput(ns("climate_ui")),
+    shiny::uiOutput(ns("reach_ui"))
   )
 }
 
@@ -64,6 +65,7 @@ mod_3_10_cost_effectiveness_server <- function(id,
                                                annual_effects = reactive(NULL),
                                                metric_decomposition = reactive(NULL),
                                                poverty_line = reactive(NULL),
+                                               reach_poverty_line = reactive(NULL),
                                                hist_label = reactive("Historical"),
                                                analysis_unit = reactive("hh"),
                                                stale = reactive(FALSE)) {
@@ -295,6 +297,86 @@ mod_3_10_cost_effectiveness_server <- function(id,
       .wise_diag_reactable(.sp_climate_cost_display(d, ce()$currency))
     })
 
+    # Shock-affected poor: coverage and adequacy over loss-event years ----
+
+    reach <- reactive({
+      x <- ce()
+      s <- shock_summary()
+      if (!identical(x$status, "ok") || !isTRUE(x$shock) || is.null(s$reach)) {
+        return(NULL)
+      }
+      line <- reach_poverty_line() %||% poverty_line()
+      list(
+        line = line,
+        res = sp_shock_reach(
+          s$reach, baseline_svy(), line, x$currency, analysis_unit() %||% "hh"
+        ),
+        event_pct = s$reach_loss_event_pct
+      )
+    })
+
+    output$reach_ui <- shiny::renderUI({
+      r <- reach()
+      if (is.null(r)) {
+        return(NULL)
+      }
+      prefix <- .sp_currency_prefix(ce()$currency)
+      line_ok <- is.finite(suppressWarnings(as.numeric(r$line)[1L]))
+      shiny::tagList(
+        shiny::h4("Shock-affected poor", class = "diagnostic-section-heading"),
+        shiny::div(
+          class = "results-section-card diagnostic-section-card",
+          shiny::tags$p(
+            class = "diagnostic-note",
+            paste0(
+              "Household-years in which a household that was poor at baseline lost ",
+              "at least ", fmt_num(r$event_pct, 0), "% of its own typical welfare "
+            ),
+            "(the loss-event share of the run). Coverage is the share of those",
+            "household-years in which the household was paid. Adequacy is the",
+            "payment as a share of the modelled loss.",
+            if (line_ok) {
+              paste0(" Poverty line: ", prefix, fmt_num(r$line, 2), " per day (Results).")
+            }
+          ),
+          if (nrow(r$res)) {
+            shiny::tagList(
+              shiny::div(
+                class = "wise-reactable-controls",
+                wise_reactable_csv_button(ns("reach_table"), "policy_shock_affected_poor")
+              ),
+              reactable::reactableOutput(ns("reach_table"))
+            )
+          } else {
+            shiny::tags$p(class = "text-muted small", "Needs a positive poverty line.")
+          }
+        )
+      )
+    })
+    outputOptions(output, "reach_ui", suspendWhenHidden = FALSE)
+
+    reach_display <- reactive({
+      r <- reach()
+      if (is.null(r) || !nrow(r$res)) {
+        return(NULL)
+      }
+      pct <- function(x) fmt_num(100 * x, digits = 1, suffix = "%", na = "Not available")
+      data.frame(
+        Scenario = r$res$scenario,
+        `Poor household-years with a loss event` = fmt_num(
+          r$res$poor_affected_years, digits = 0, na = "Not available"
+        ),
+        `Coverage (paid)` = pct(r$res$coverage),
+        `Adequacy (payment / loss)` = pct(r$res$adequacy),
+        check.names = FALSE, stringsAsFactors = FALSE
+      )
+    })
+    output$reach_table <- reactable::renderReactable({
+      df <- reach_display()
+      req(!is.null(df))
+      .wise_diag_reactable(df)
+    })
+
     # Exports ----
 
     wise_export_table(
@@ -318,6 +400,24 @@ mod_3_10_cost_effectiveness_server <- function(id,
         "Annual cost, net change in the number of poor or value of the change,",
         "and the ratio per scenario, in the average and a 1-in-20 year, at the",
         "Results metric and poverty line."
+      )
+    )
+    wise_export_table(
+      key = "policy_shock_affected_poor",
+      label = "Shock-responsive coverage and adequacy of the affected poor",
+      step = 3L,
+      fun = function() {
+        r <- reach()
+        if (is.null(r) || !nrow(r$res)) NULL else cbind(
+          r$res, poverty_line = suppressWarnings(as.numeric(r$line)[1L]),
+          loss_event_pct = r$event_pct
+        )
+      },
+      stale = stale,
+      description = paste(
+        "Share of loss-event household-years of the baseline poor in which the",
+        "household was paid, and payments as a share of the modelled loss, by",
+        "scenario, at the Results poverty line."
       )
     )
     wise_export_table(

@@ -142,6 +142,49 @@ test_that("a shock program pairs its cost with the same member-years", {
   })
 })
 
+test_that("a shock run shows coverage and adequacy of the affected poor", {
+  rows <- data.frame(
+    scenario = "Hist", member = "Historical", sim_year = 1:4, total_cost = 1000
+  )
+  # Poor at the line of 3: households 1 and 2 (welfare 1 and 2)
+  reach <- matrix(c(
+    2, 1, 40, 10,
+    2, 2, 20, 20,
+    9, 0, 90, 0,
+    9, 0, 90, 0
+  ), 4, byrow = TRUE, dimnames = list(NULL, .sp_shock_reach_cols))
+  args <- ce_args(
+    sp = ce_sp(
+      sp_type = "shock", payments_per_activation = 1L, trigger_type = "weather",
+      trigger_variable = "t", trigger_direction = "above", trigger_value = 30,
+      payout_scope = "local"
+    ),
+    shock_summary = shiny::reactiveVal(list(
+      rows = rows, summary = data.frame(scenario = "Hist", activation_freq = 1,
+        mean_total_cost = 1000, cost_1_in_20 = NA_real_),
+      reach = list(Hist = reach), reach_loss_event_pct = 10
+    )),
+    annual_effects = shiny::reactiveVal(data.frame(
+      scenario = "Hist", model_id = "Historical", sim_year = 1:4, value = -0.05
+    ))
+  )
+  testServer(mod_3_10_cost_effectiveness_server, args = args, {
+    r <- reach()
+    # Equal weights: coverage (1 + 2) / (2 + 2), adequacy (10 + 20) / (40 + 20)
+    expect_equal(r$res$coverage, 3 / 4)
+    expect_equal(r$res$adequacy, 30 / 60)
+    html <- as.character(output$reach_ui$html)
+    expect_match(html, "Shock-affected poor")
+    expect_match(html, "lost at least 10%")
+    expect_match(html, "Poverty line: \\$3.00")
+    d <- reach_display()
+    expect_identical(d[["Coverage (paid)"]], "75.0%")
+    expect_identical(d[["Adequacy (payment / loss)"]], "50.0%")
+    keys <- vapply(wise_export_items(session), `[[`, character(1), "key")
+    expect_true("policy_shock_affected_poor" %in% keys)
+  })
+})
+
 test_that("a regular program has no climate-adjusted section", {
   testServer(mod_3_10_cost_effectiveness_server, args = ce_args(), {
     expect_null(climate())
