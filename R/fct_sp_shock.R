@@ -732,6 +732,137 @@ sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
   )
 }
 
+#' Response check: where modelled loss concentrates along a weather variable
+#'
+#' A weather variable has no built-in adverse tail (on BFA the loss follows wet
+#' years in `spei6`, not temperature), so before choosing a trigger the user can
+#' see the mean modelled loss by decile of the variable. The loss is the rule 7
+#' definition used by `sp_shock_pipeline_rows()`: level-scale central prediction
+#' relative to the household's own historical mean level
+#' (`sp_shock_reference()`), back-transformed before averaging, survey-weighted,
+#' no residual draws. Negative values are losses. Deciles are weighted deciles of
+#' the variable over household-years (prediction rows): equal values stay in one
+#' decile, which is the one holding their cumulative weight share, so fewer than
+#' `n_bins` deciles can result for a coarse variable.
+#'
+#' The direction suggestion compares the mean loss in the lowest and highest
+#' fifth of the deciles with the middle ones. An end counts when its loss is at
+#' least 1 percentage point deeper than the middle; both ends count when the
+#' shallower one is at least half as deep as the deeper one (`"either"`);
+#' otherwise the deeper end is suggested. With no end that deep the answer is
+#' `"none"`.
+#'
+#' @param pipeline Historical Step 2 pipeline (`y_point`, `svy_row_id`,
+#'   `weight`).
+#' @param exposure Resolved exposure of that pipeline (`table`, `row_index`).
+#' @param variable Weather variable (a column of `exposure$table`).
+#' @param is_log Whether the outcome is log-transformed.
+#' @param n_bins Number of weighted bins (deciles by default).
+#' @return A list. On success: `deciles` (data frame: `decile`, `pop`,
+#'   `mean_value`, `min_value`, `max_value`, `mean_loss`), `direction`
+#'   (`"above"`, `"below"`, `"either"` or `"none"`), `depth` (named `low`,
+#'   `high`: mean loss in the middle minus mean loss at that end), `hint` (one
+#'   sentence), `variable`, `n_rows`. Otherwise `problem`, a message to show.
+#' @keywords internal
+sp_response_check <- function(pipeline, exposure, variable, is_log = FALSE, n_bins = 10L) {
+  tbl <- if (is.list(exposure)) exposure$table
+  if (!is.data.frame(tbl) || length(variable) != 1L || !variable %in% names(tbl) ||
+    !is.numeric(tbl[[variable]])) {
+    return(list(problem = paste0(
+      "The response check needs a continuous weather variable; '",
+      paste(variable, collapse = ""), "' is not one."
+    )))
+  }
+  ids <- as.integer(pipeline$svy_row_id)
+  value <- as.numeric(tbl[[variable]])[exposure$row_index]
+  w <- if (is.null(pipeline$weight)) rep(1, length(ids)) else as.numeric(pipeline$weight)
+  w[!is.finite(w) | w < 0] <- 0
+  y <- as.numeric(pipeline$y_point)
+  level <- if (isTRUE(is_log)) exp(y) else y
+  rel <- level / sp_shock_reference(pipeline, max(ids), isTRUE(is_log))[ids] - 1
+  ok <- is.finite(value) & is.finite(rel) & w > 0
+  if (sum(ok) < 2L || length(unique(value[ok])) < 3L) {
+    return(list(problem = paste0(
+      "'", variable, "' has too few distinct historical values to show a response."
+    )))
+  }
+  v <- value[ok]
+  w <- w[ok]
+  rel <- rel[ok]
+
+  u <- sort(unique(v))
+  g <- match(v, u)
+  cum <- cumsum(rowsum(w, g, reorder = TRUE)[, 1L]) / sum(w)
+  bin <- pmin(n_bins, pmax(1L, ceiling(cum * n_bins - 1e-9)))[g]
+  pop <- rowsum(w, bin, reorder = TRUE)[, 1L]
+  deciles <- data.frame(
+    decile = as.integer(names(pop)), pop = unname(pop),
+    mean_value = unname(rowsum(w * v, bin, reorder = TRUE)[, 1L] / pop),
+    min_value = unname(tapply(v, bin, min)), max_value = unname(tapply(v, bin, max)),
+    mean_loss = unname(rowsum(w * rel, bin, reorder = TRUE)[, 1L] / pop)
+  )
+  nb <- nrow(deciles)
+  if (nb < 3L) {
+    return(list(problem = paste0(
+      "'", variable, "' has too few distinct historical values to show a response."
+    )))
+  }
+
+  k <- max(1L, round(0.2 * nb))
+  ends <- list(low = seq_len(k), high = seq(nb - k + 1L, nb))
+  mid_i <- setdiff(seq_len(nb), c(ends$low, ends$high))
+  if (!length(mid_i)) mid_i <- seq_len(nb)
+  mean_loss <- function(i) sum(deciles$pop[i] * deciles$mean_loss[i]) / sum(deciles$pop[i])
+  mid <- mean_loss(mid_i)
+  depth <- c(low = mid - mean_loss(ends$low), high = mid - mean_loss(ends$high))
+  min_depth <- 0.01
+  direction <- if (max(depth) < min_depth) {
+    "none"
+  } else if (all(depth >= min_depth) && min(depth) >= 0.5 * max(depth)) {
+    "either"
+  } else if (depth[["high"]] >= depth[["low"]]) {
+    "above"
+  } else {
+    "below"
+  }
+  list(
+    deciles = deciles, direction = direction, depth = depth,
+    hint = .sp_response_hint(direction, variable, depth),
+    variable = variable, n_rows = length(v)
+  )
+}
+
+# One sentence for the response check. Names the weather condition when the
+# variable name says what its high and low ends mean (standardized indices and
+# precipitation: wet / dry; temperature: hot / cold).
+.sp_response_hint <- function(direction, variable, depth) {
+  poles <- if (grepl("^(spei|spi|pr|precip|rain|ppt)", variable, ignore.case = TRUE)) {
+    c(low = "dry years", high = "wet years")
+  } else if (grepl("^(t|temp|tmax|tmin|tmean|tas)([0-9_]|$)", variable, ignore.case = TRUE)) {
+    c(low = "cold years", high = "hot years")
+  }
+  pct <- function(x) paste0(formatC(100 * x, format = "f", digits = 1), " points")
+  switch(direction,
+    none = paste0(
+      "No clear response: modelled loss does not concentrate at either end of ",
+      variable, ", so it is a weak trigger."
+    ),
+    either = paste0(
+      "Losses concentrate at both ends",
+      if (!is.null(poles)) paste0(" (", poles[["low"]], " and ", poles[["high"]], ")"),
+      ": either end of ", variable, "."
+    ),
+    {
+      end <- if (identical(direction, "above")) "high" else "low"
+      paste0(
+        "Losses concentrate in ",
+        if (!is.null(poles)) paste0(poles[[end]], ", ") else "",
+        end, " ", variable, " (", pct(depth[[end]]), " deeper than the middle deciles)."
+      )
+    }
+  )
+}
+
 #' Welfare effect of a transfer against the predicted level
 #'
 #' For a log outcome the transfer is a level amount, so its log effect is taken

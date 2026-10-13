@@ -236,6 +236,7 @@ mod_3_01_sp_server <- function(id,
               textOutput(ns("trigger_unit"), container = function(...) {
                 tags$p(class = "text-muted small", ...)
               }),
+              uiOutput(ns("trigger_response")),
               pill_toggle(
                 inputId = ns("trigger_direction"),
                 label = "Pay when the value is",
@@ -432,6 +433,77 @@ mod_3_01_sp_server <- function(id,
         tryCatch(selected_weather(), error = function(e) NULL)
       )
       if (nzchar(unit)) paste0("Thresholds are in: ", unit, ".") else ""
+    })
+
+    # Response check (P2-1): modelled loss by decile of the chosen variable, so
+    # the user sees which end of the variable is adverse before setting a
+    # direction. Depends on the variable only, not on the other trigger fields.
+    trigger_response <- reactive({
+      var <- input$trigger_variable
+      hs <- tryCatch(hist_sim(), error = function(e) NULL)
+      ex <- hist_exposure()
+      if (is.null(var) || !nzchar(var) || is.null(hs$pipeline) || is.null(ex)) {
+        return(NULL)
+      }
+      tryCatch(
+        sp_response_check(
+          hs$pipeline, ex, var,
+          is_log = identical(hs$so$transform %||% "", "log")
+        ),
+        error = function(e) list(problem = wise_user_error(e, "Response check"))
+      )
+    })
+
+    output$trigger_response <- renderUI({
+      r <- trigger_response()
+      if (is.null(r)) {
+        return(NULL)
+      }
+      if (!is.null(r$problem)) {
+        return(tags$p(class = "text-muted small", r$problem))
+      }
+      d <- r$deciles
+      pct <- function(x) fmt_num(100 * x, digits = 1, suffix = "%", na = "n/a")
+      st <- sp_shock_state()
+      basis <- if (is.list(st) && is.null(st$problem) &&
+        is.finite(st$false_negative_rate %||% NA_real_)) {
+        tags$p(
+          class = "text-muted small",
+          "Current trigger: misses ", pct(st$false_negative_rate),
+          " of loss events, ", pct(st$false_positive_rate %||% NA_real_),
+          " false positives (loss event as set below)."
+        )
+      }
+      tags$div(
+        class = "sp-response-check",
+        tags$p(class = "small mb-1", tags$b("Response check. "), r$hint),
+        tags$details(
+          class = "small mb-1",
+          tags$summary("Loss by decile"),
+          tags$table(
+            class = "table table-sm small mb-1",
+            tags$caption(
+              class = "small text-muted",
+              "Mean modelled loss by decile of ", r$variable,
+              " over household-years (negative = loss, survey-weighted)."
+            ),
+            tags$thead(tags$tr(
+              tags$th("Decile"), tags$th("Range"), tags$th("Mean loss")
+            )),
+            tags$tbody(lapply(seq_len(nrow(d)), function(i) {
+              tags$tr(
+                tags$td(d$decile[[i]]),
+                tags$td(paste(
+                  fmt_num(d$min_value[[i]], digits = 2), "to",
+                  fmt_num(d$max_value[[i]], digits = 2)
+                )),
+                tags$td(pct(d$mean_loss[[i]]))
+              )
+            }))
+          )
+        ),
+        basis
+      )
     })
 
     output$trigger_value_hint <- renderText({

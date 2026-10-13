@@ -901,3 +901,126 @@ test_that("the trigger flyout shows the unit of the chosen variable (P1-16)", {
     expect_match(output$trigger_unit, "standardized anomaly \\(z-score\\)")
   })
 })
+
+# Response check (P2-1) ----
+
+# Small panel: one row per household-year. `exposure$table` holds the weather
+# variable `t`; `row_index` maps prediction rows to it.
+response_panel <- function(value, level, hh, weight = rep(1, length(value)), is_log = FALSE) {
+  list(
+    pipeline = list(
+      y_point = if (is_log) log(level) else level, svy_row_id = hh, weight = weight,
+      sim_year = rep(1L, length(value))
+    ),
+    exposure = list(table = data.frame(t = value), row_index = seq_along(value))
+  )
+}
+
+# Two households, five years each: levels 8..12 and 40..60 (own mean 10 and 50),
+# so the relative loss is -0.2, -0.1, 0, 0.1, 0.2 in both
+response_base <- function(...) {
+  response_panel(
+    value = c(1, 3, 5, 7, 9, 2, 4, 6, 8, 10),
+    level = c(8, 9, 10, 11, 12, 40, 45, 50, 55, 60),
+    hh = rep(1:2, each = 5L), ...
+  )
+}
+
+test_that("response deciles are hand-calculated on the level scale with weights", {
+  p <- response_base(weight = rep(c(1, 3), each = 5L))
+  out <- sp_response_check(p$pipeline, p$exposure, "t", n_bins = 4L)
+  expect_null(out$problem)
+  # Cumulative weight shares .05 .2 .25 .4 .45 .6 .65 .8 .85 1 -> bins of
+  # values {1,2,3}, {4,5}, {6,7}, {8,9,10}
+  expect_equal(out$deciles$decile, 1:4)
+  expect_equal(out$deciles$pop, c(5, 4, 4, 7))
+  expect_equal(out$deciles$mean_value, c(10 / 5, (3 * 4 + 5) / 4, (3 * 6 + 7) / 4, 63 / 7))
+  expect_equal(out$deciles$min_value, c(1, 4, 6, 8))
+  expect_equal(out$deciles$max_value, c(3, 5, 7, 10))
+  expect_equal(out$deciles$mean_loss, c(-0.9 / 5, -0.3 / 4, 0.1 / 4, 1.1 / 7))
+  expect_identical(out$direction, "below")
+})
+
+test_that("a log outcome is back-transformed before averaging the loss", {
+  lvl <- response_base()
+  lg <- response_base(is_log = TRUE)
+  a <- sp_response_check(lvl$pipeline, lvl$exposure, "t")
+  b <- sp_response_check(lg$pipeline, lg$exposure, "t", is_log = TRUE)
+  expect_equal(b$deciles, a$deciles)
+  expect_equal(a$deciles$mean_loss, c(-.2, -.2, -.1, -.1, 0, 0, .1, .1, .2, .2))
+  # Reading the logs as levels would give a different answer
+  wrong <- sp_response_check(lg$pipeline, lg$exposure, "t", is_log = FALSE)
+  expect_false(isTRUE(all.equal(wrong$deciles$mean_loss, a$deciles$mean_loss)))
+})
+
+test_that("direction: one-sided response gives the loss end, two-sided gives either", {
+  p <- response_base()
+  expect_identical(sp_response_check(p$pipeline, p$exposure, "t")$direction, "below")
+  p$exposure$table$t <- -p$exposure$table$t
+  high <- sp_response_check(p$pipeline, p$exposure, "t")
+  expect_identical(high$direction, "above")
+  expect_match(high$hint, "high t")
+
+  u <- response_panel(1:10, c(80, rep(100, 8), 80), rep(1L, 10L))
+  expect_identical(sp_response_check(u$pipeline, u$exposure, "t")$direction, "either")
+  flat <- response_panel(1:10, rep(100, 10), rep(1L, 10L))
+  none <- sp_response_check(flat$pipeline, flat$exposure, "t")
+  expect_identical(none$direction, "none")
+  expect_match(none$hint, "No clear response")
+})
+
+test_that("the hint names wet years for a standardized precipitation index", {
+  p <- response_base()
+  p$exposure$table$spei6 <- -p$exposure$table$t
+  out <- sp_response_check(p$pipeline, p$exposure, "spei6")
+  expect_identical(out$direction, "above")
+  expect_match(out$hint, "wet years, high spei6", fixed = TRUE)
+  expect_match(
+    sp_response_check(p$pipeline, p$exposure, "t")$hint, "cold years, low t",
+    fixed = TRUE
+  )
+})
+
+test_that("an unusable variable returns a message, not an error", {
+  p <- response_base()
+  p$exposure$table$f <- factor(rep(c("a", "b"), 5L))
+  p$exposure$table$const <- 1
+  expect_match(sp_response_check(p$pipeline, p$exposure, "gone")$problem, "continuous")
+  expect_match(sp_response_check(p$pipeline, p$exposure, "f")$problem, "continuous")
+  expect_match(sp_response_check(p$pipeline, p$exposure, "const")$problem, "too few")
+  expect_match(sp_response_check(p$pipeline, list(status = "unavailable"), "t")$problem, "continuous")
+})
+
+test_that("the response check is deterministic and ignores row order", {
+  p <- response_base(weight = rep(c(1, 3), each = 5L))
+  a <- sp_response_check(p$pipeline, p$exposure, "t")
+  expect_identical(a, sp_response_check(p$pipeline, p$exposure, "t"))
+  perm <- c(7L, 2L, 10L, 4L, 1L, 9L, 3L, 8L, 5L, 6L)
+  q <- response_panel(
+    p$exposure$table$t[perm], p$pipeline$y_point[perm], p$pipeline$svy_row_id[perm],
+    p$pipeline$weight[perm]
+  )
+  expect_equal(sp_response_check(q$pipeline, q$exposure, "t"), a)
+})
+
+test_that("the trigger flyout shows the response check for the chosen variable", {
+  p <- response_base()
+  p$exposure$table$spei6 <- -p$exposure$table$t
+  hs <- list(
+    svy = data.frame(welfare = 1:2, weight = 1, spei6 = c(1, 2)),
+    pipeline = c(p$pipeline, list(weather_exposure = c(
+      list(schema = 1L, status = "ok", weather_columns = "spei6"), p$exposure
+    )))
+  )
+  testServer(mod_3_01_sp_server, args = list(
+    id = "sp_resp", survey_weather = shiny::reactiveVal(hs$svy),
+    variable_list = shiny::reactiveVal(data.frame()),
+    analysis_unit = shiny::reactiveVal("hh"), hist_sim = shiny::reactiveVal(hs)
+  ), {
+    session$setInputs(trigger_variable = "spei6")
+    html <- as.character(output$trigger_response$html)
+    expect_match(html, "wet years, high spei6", fixed = TRUE)
+    session$setInputs(trigger_variable = "nope")
+    expect_match(as.character(output$trigger_response$html), "continuous weather variable")
+  })
+})
