@@ -620,6 +620,155 @@ sp_shock_summary <- function(rows) {
   do.call(rbind, c(unname(out), list(make.row.names = FALSE)))
 }
 
+#' Annual cost of a shock program by scenario, on the effect's own support
+#'
+#' The cost side of the cost-effectiveness figures (P2-2). The Results effect is
+#' an equal-model mean over matched (member, year) cells, and its adverse-year
+#' value interpolates two ranked baseline years per member
+#' (`adverse_year_support()`). The cost is pooled the same way, so both sides of
+#' a ratio describe the same member-years, not a ratio of unrelated means.
+#'
+#' `cost_avg` is the equal-member mean of each member's mean annual cost over the
+#' matched years. `cost_tail` applies each member's adverse-year support to its
+#' annual cost and averages the members equally; it is `NA` when any member in
+#' `supports` has no usable support or no cost for a support year.
+#'
+#' @param rows Run rows (`scenario`, `member`, `sim_year`, `total_cost`), as
+#'   published in `shock_summary()$rows`.
+#' @param matched Optional data frame (`scenario`, `model_id`, `sim_year`) of the
+#'   member-years behind the effect (`paired_annual_effects`). `NULL` keeps all
+#'   rows.
+#' @param supports Optional data frame of adverse-year supports (`scenario`,
+#'   `model_id`, `probability` and the `adverse_year_support()` fields, as in
+#'   `metric_decomposition()$adverse_support`).
+#' @param historical Scenario label of the historical arm. Rows of member
+#'   `"Historical"` take this label so they match the Results scenario names.
+#' @param probability Exceedance probability of the adverse year (0.05 is the
+#'   1-in-20 year).
+#' @return Data frame: `scenario`, `cost_avg`, `cost_tail`, `n_models`.
+#' @keywords internal
+sp_shock_cost_by_scenario <- function(rows, matched = NULL, supports = NULL,
+                                      historical = NULL, probability = 0.05) {
+  empty <- data.frame(
+    scenario = character(), cost_avg = numeric(), cost_tail = numeric(),
+    n_models = integer(), stringsAsFactors = FALSE
+  )
+  need <- c("scenario", "member", "sim_year", "total_cost")
+  if (!is.data.frame(rows) || !nrow(rows) || !all(need %in% names(rows))) {
+    return(empty)
+  }
+  d <- data.frame(
+    scenario = as.character(rows$scenario), member = as.character(rows$member),
+    sim_year = as.numeric(rows$sim_year), cost = as.numeric(rows$total_cost),
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(historical)) {
+    d$scenario[d$member == "Historical"] <- as.character(historical)[1L]
+  }
+  key <- function(s, m, y) paste(s, m, y, sep = "\r")
+  if (is.data.frame(matched) && nrow(matched)) {
+    d <- d[key(d$scenario, d$member, d$sim_year) %in%
+      key(matched$scenario, matched$model_id, as.numeric(matched$sim_year)), , drop = FALSE]
+  }
+  d <- d[is.finite(d$cost), , drop = FALSE]
+  if (!nrow(d)) {
+    return(empty)
+  }
+
+  scen <- unique(d$scenario)
+  out <- lapply(scen, function(s) {
+    ds <- d[d$scenario == s, , drop = FALSE]
+    members <- split(ds, ds$member)
+    avg <- mean(vapply(members, function(m) mean(m$cost), numeric(1)))
+    tail <- NA_real_
+    if (is.data.frame(supports) && nrow(supports)) {
+      sup <- supports[as.character(supports$scenario) == s &
+        abs(as.numeric(supports$probability) - probability) < 1e-8, , drop = FALSE]
+      if (nrow(sup)) {
+        vals <- vapply(seq_len(nrow(sup)), function(i) {
+          m <- members[[as.character(sup$model_id[[i]])]]
+          if (is.null(m)) {
+            return(NA_real_)
+          }
+          apply_adverse_year_support(m$cost, m$sim_year, sup[i, , drop = FALSE])$value
+        }, numeric(1))
+        if (all(is.finite(vals))) tail <- mean(vals)
+      }
+    }
+    data.frame(
+      scenario = s, cost_avg = avg, cost_tail = tail, n_models = length(members),
+      stringsAsFactors = FALSE
+    )
+  })
+  do.call(rbind, out)
+}
+
+#' Climate-adjusted cost: the shock program under each scenario against history
+#'
+#' The trigger is fixed on the historical record, so under warming it fires more
+#' (or less) often and the bill moves with it. This lays the run summary out as
+#' that comparison (plan section 3.8): activation and mean annual cost per
+#' scenario and their change against the reference scenario.
+#'
+#' @param summary Result of `sp_shock_summary()` (or `sp_shock_rescore()`).
+#' @param reference Scenario label to compare against; defaults to the first
+#'   row, which the run fills with the historical arm.
+#' @return Data frame: `scenario`, `activation_freq`, `mean_total_cost`,
+#'   `cost_1_in_20`, `activation_change` (percentage points against the
+#'   reference, as a fraction), `cost_change` (relative change in mean cost;
+#'   `NA` when the reference cost is 0), `is_reference`.
+#' @keywords internal
+sp_shock_climate_cost <- function(summary, reference = NULL) {
+  if (!is.data.frame(summary) || !nrow(summary)) {
+    return(data.frame())
+  }
+  ref <- if (!is.null(reference) && reference %in% summary$scenario) {
+    match(reference, summary$scenario)
+  } else {
+    1L
+  }
+  base_cost <- summary$mean_total_cost[[ref]]
+  data.frame(
+    scenario = as.character(summary$scenario),
+    activation_freq = summary$activation_freq,
+    mean_total_cost = summary$mean_total_cost,
+    cost_1_in_20 = summary$cost_1_in_20,
+    activation_change = summary$activation_freq - summary$activation_freq[[ref]],
+    cost_change = if (is.finite(base_cost) && base_cost > 0) {
+      summary$mean_total_cost / base_cost - 1
+    } else {
+      rep(NA_real_, nrow(summary))
+    },
+    is_reference = seq_len(nrow(summary)) == ref,
+    stringsAsFactors = FALSE
+  )
+}
+
+# Display table for `sp_shock_climate_cost()`: strings, with signed changes.
+.sp_climate_cost_display <- function(d, currency = "PPP") {
+  if (!is.data.frame(d) || !nrow(d)) {
+    return(data.frame(Scenario = character()))
+  }
+  prefix <- .sp_currency_prefix(currency)
+  money <- function(x) fmt_num(x, digits = 0, prefix = prefix, na = "Not available")
+  signed <- function(x, scale, suffix) {
+    ifelse(is.finite(x), paste0(ifelse(x > 0, "+", ""), fmt_num(scale * x, 1, suffix = suffix)),
+      "Not available")
+  }
+  out <- data.frame(
+    Scenario = d$scenario,
+    `Years with payments` = fmt_num(100 * d$activation_freq, 1, suffix = "%", na = "Not available"),
+    `Change vs historical` = ifelse(d$is_reference, "Reference",
+      signed(d$activation_change, 100, " pp")),
+    `Mean annual cost` = money(d$mean_total_cost),
+    `Cost change vs historical` = ifelse(d$is_reference, "Reference",
+      signed(d$cost_change, 100, "%")),
+    `1-in-20 year cost` = money(d$cost_1_in_20),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+  out
+}
+
 #' Annual cost and activation of one pipeline
 #'
 #' One row per simulation year. A year activates when any prediction row is

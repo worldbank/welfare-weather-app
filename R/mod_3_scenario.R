@@ -335,6 +335,54 @@ mod_3_scenario_server <- function(id,
       analysis_unit = analysis_unit
     )
 
+    # Cost-effectiveness tab: cost of the cash transfer against the Results effect
+    mod_3_10_cost_effectiveness_server(
+      "cost_effectiveness",
+      sp_scenario = s6$sp_scenario,
+      infra_scenario = s6$infra_scenario,
+      digital_scenario = s6$digital_scenario,
+      labor_scenario = s6$labor_scenario,
+      education_scenario = s6$education_scenario,
+      baseline_svy = s6$baseline_svy,
+      policy_svy = s6$policy_svy,
+      shock_summary = s6$shock_summary,
+      metric_context = s7$metric_context,
+      effect_summary = s7$expected_effect_summary,
+      annual_effects = s7$paired_annual_effects,
+      metric_decomposition = s7$metric_decomposition,
+      poverty_line = s7$poverty_line,
+      hist_label = s7$hist_label,
+      analysis_unit = analysis_unit,
+      stale = s6$stale
+    )
+
+    # Wire the cost-effectiveness tab into the tabset on the first successful run
+    ce_tab_added <- reactiveVal(FALSE)
+    observeEvent(s6$sim_run_id(),
+      {
+        req(s6$sim_run_id() > 0)
+        if (!ce_tab_added()) {
+          shiny::appendTab(
+            inputId = "step3_output_tabs",
+            shiny::tabPanel(
+              title = "Cost-effectiveness",
+              value = "cost_effectiveness_tab",
+              shiny::div(id = ns("cost_effectiveness_section"))
+            ),
+            session = session
+          )
+          shiny::insertUI(
+            selector = paste0("#", ns("cost_effectiveness_section")),
+            where = "afterBegin",
+            ui = mod_3_10_cost_effectiveness_ui(ns("cost_effectiveness")),
+            session = session
+          )
+          ce_tab_added(TRUE)
+        }
+      },
+      ignoreInit = TRUE
+    )
+
     # Wire decomposition tab into tabset on first successful run
     decomp_tab_added <- reactiveVal(FALSE)
     observeEvent(s6$sim_run_id(),

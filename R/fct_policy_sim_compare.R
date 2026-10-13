@@ -3580,6 +3580,7 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
     paired_effect_summary = paired_effect_summary_rv,
     headline_paired_effect_summary = headline_adverse_summary_rv,
     expected_paired_effect_summary = headline_paired_effect_summary_rv,
+    paired_annual_effects = paired_annual_effects_rv,
     headline_cards = headline_cards_data_rv,
     aggregation_method = aggregation_method,
     poverty_line = pov_line_val,

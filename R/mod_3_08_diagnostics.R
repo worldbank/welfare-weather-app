@@ -336,6 +336,11 @@
             "single targeting draw, at the poverty line chosen in Results.",
             "Leakage and adequacy are shares of transfer spending and of the",
             "poverty gap; they say nothing about modelled welfare effects."
+          ),
+          shiny::p(
+            "For a shock-responsive program, cost, leakage and adequacy describe a",
+            "year in which every eligible household is paid; the cost over",
+            "simulated years is in the table below and the Cost-effectiveness tab."
           )
         )
       ),
@@ -500,15 +505,21 @@ mod_3_08_diagnostics_server <- function(id,
         return(NULL)
       }
       sp <- sp_scenario()
-      # Annual-cost based metrics need a transfer paid every year; a shock
-      # program is reported in its own table below.
-      if (identical(sp$sp_type, "shock")) {
-        return(NULL)
-      }
+      shock <- identical(sp$sp_type, "shock")
       base <- baseline_svy()
       pol <- policy_svy()
       if (is.null(base) || is.null(pol)) {
         return(NULL)
+      }
+      # A shock program pays no transfer every year. Its design figures use the
+      # per-household amount paid in an activated year; realised annual cost is
+      # in the shock-responsive table below and the cost-effectiveness tab.
+      if (shock) {
+        amount <- shock_summary()$per_household
+        if (length(amount) != nrow(pol)) {
+          return(NULL)
+        }
+        pol[[SP_TRANSFER_COL]] <- amount
       }
       ideal <- tryCatch(
         if (!is.null(sp)) .determine_sp_eligibility(base, sp, apply_errors = FALSE),
@@ -525,7 +536,8 @@ mod_3_08_diagnostics_server <- function(id,
         analysis_unit = d$analysis_unit %||% "hh",
         currency = d$transfer_currency %||% "PPP",
         admin_share = d$admin_share %||% 0,
-        eligibility = ideal
+        eligibility = ideal,
+        shock = shock
       )
       .sp_effectiveness_display(res, d$transfer_currency %||% "PPP")
     })
@@ -533,13 +545,9 @@ mod_3_08_diagnostics_server <- function(id,
     output$sp_effectiveness_table <- reactable::renderReactable({
       df <- sp_effectiveness_display()
       if (is.null(df) || nrow(df) == 0L) {
-        return(.wise_diag_reactable(data.frame(Note = if (identical(
-          tryCatch(sp_scenario()$sp_type, error = function(e) NULL), "shock"
-        )) {
-          "Not reported for a shock-responsive program; see the shock-responsive table below."
-        } else {
-          "No social protection transfer to evaluate."
-        })))
+        return(.wise_diag_reactable(data.frame(
+          Note = "No social protection transfer to evaluate."
+        )))
       }
       .wise_diag_reactable(df)
     })

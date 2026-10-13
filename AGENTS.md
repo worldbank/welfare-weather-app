@@ -58,7 +58,7 @@ Development scripts are in `dev/`: `run_dev.R` (run the app), `00_make_manifest.
 1. **Step 0 – Overview** (`mod_0_overview`): Data source configuration (local/S3/GCS/Azure/HuggingFace/Databricks), loads survey metadata.
 2. **Step 1 – Modelling** (`mod_1_modelling` + 8 sub-modules): Select sample → explore data → define outcome variable → pick weather variables → configure model → view results.
 3. **Step 2 – Simulation** (`mod_2_simulation` + 3 sub-modules): Define historical/future weather scenarios (including CMIP6 climate models), generate welfare predictions.
-4. **Step 3 – Policy Scenarios** (`mod_3_scenario` + 9 sub-modules): Model social protection, infrastructure, digital, labor market, and education interventions (`mod_3_01`-`mod_3_05`), then run the policy simulation, results, diagnostics, and decomposition (`mod_3_06`-`mod_3_09`).
+4. **Step 3 – Policy Scenarios** (`mod_3_scenario` + 10 sub-modules): Model social protection, infrastructure, digital, labor market, and education interventions (`mod_3_01`-`mod_3_05`), then run the policy simulation, results, diagnostics, and decomposition (`mod_3_06`-`mod_3_09`), and the cash-transfer cost-effectiveness tab (`mod_3_10`).
 
 Reactive data flows forward through the pipeline: Step 0 outputs feed Step 1, which feeds Steps 2 and 3.
 
@@ -69,7 +69,7 @@ R/
 ├── app_ui.R / app_server.R    # Top-level app wiring
 ├── app_config.R               # Environment detection (dev/Posit Connect/Databricks)
 ├── run_app.R                  # Entry point
-├── mod_*.R                    # 24 Shiny modules (each has a UI and server function)
+├── mod_*.R                    # 25 Shiny modules (each has a UI and server function)
 ├── fct_*.R                    # 43 business logic files (no Shiny dependencies)
 └── utils_*.R                  # 5 files: shared math, UI, plot-theme, logging, and Step 1 helpers
 src/welfare_stats.cpp          # Rcpp kernel: all aggregation statistics in one sort per group
@@ -84,7 +84,7 @@ src/welfare_stats.cpp          # Rcpp kernel: all aggregation statistics in one 
 - `fct_sim_compare.R` – visualization and comparison functions (exceedance curves, threshold tables)
 - `fct_results.R` – output formatting, coefficient plots, tables
 - `fct_policy_sim.R` – policy scenario variable discovery and placeholder UI
-- `fct_sp_effectiveness.R` – social protection cost and targeting metrics (coverage, leakage, adequacy, realised errors) shown in the Step 3 diagnostics
+- `fct_sp_effectiveness.R` – social protection cost and targeting metrics (coverage, leakage, adequacy, realised errors) shown in the Step 3 diagnostics (for a shock program: who can be paid and the cost of a year with payments), plus the effect-per-cost engine of the cost-effectiveness tab (`sp_cost_effectiveness()`: cost per person lifted for a poverty rate, gain per $1 otherwise, average and 1-in-20 year)
 - `fct_sp_shock.R` – **shock-responsive social protection**: spec validation (`.sp_shock_problem()`), trigger thresholds from the historical exposure (`sp_trigger_thresholds()`: weather level or 1-in-N return period, N-year record rule), trigger state and payout scope (`sp_trigger_state()`), the run-level `sp_shock_plan()` (plain data), the dynamic per-row transfer, run outputs (`sp_shock_pipeline_rows()`, `sp_shock_summary()`: activation, annual cost distribution, basis risk, leakage) and the Step 3 summary-card preview (`sp_shock_preview()`)
 - `fct_policy_decompose.R` – **policy effect decomposition** (main effect + resilience: repositioning + interaction)
 - `fct_policy_metric_decompose.R` / `fct_decomposition_summary.R` – metric-aware Step 3 decomposition (per-metric channels) and its summaries

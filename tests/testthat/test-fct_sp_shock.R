@@ -705,6 +705,46 @@ test_that("the diagnostics tab renders the shock section only for a shock run", 
   )
 })
 
+test_that("the effectiveness table reports a shock program's design figures (P2-2)", {
+  base <- data.frame(welfare = c(1, 2, 4, 6), hhsize = 2, weight = 100)
+  pol <- base
+  # Ever-paid marker the run publishes; the design figures use the amount per
+  # eligible household instead
+  pol[[SP_TRANSFER_COL]] <- c(0, 0, 0, 0.1)
+  sp <- reactiveVal(list(sp_type = "shock"))
+  testServer(
+    mod_3_08_diagnostics_server,
+    args = list(
+      id = "diag_shock_eff", baseline_svy = reactive(base), policy_svy = reactive(pol),
+      diagnostic_summary = reactive(list(analysis_unit = "hh", transfer_currency = "PPP",
+        admin_share = 0)),
+      shock_summary = reactive(list(per_household = c(0.5, 1, 1, 0))),
+      sp_scenario = sp, poverty_line = reactive(3), tabset_id = "tabs"
+    ),
+    {
+      df <- sp_effectiveness_display()
+      expect_false(is.null(df))
+      row <- df[df$Metric == "Annual cost per person in the population (year with payments)", ]
+      expect_match(row$Value, "^\\$228\\.1")
+      expect_true("Leakage to the non-poor (if paid)" %in% df$Metric)
+      expect_no_match(paste(df$Note, collapse = " "), "Not reported")
+    }
+  )
+  # A per-household vector of the wrong length is not used
+  testServer(
+    mod_3_08_diagnostics_server,
+    args = list(
+      id = "diag_shock_eff2", baseline_svy = reactive(base), policy_svy = reactive(pol),
+      diagnostic_summary = reactive(list(analysis_unit = "hh", transfer_currency = "PPP")),
+      shock_summary = reactive(list(per_household = 1:2)),
+      sp_scenario = sp, poverty_line = reactive(3), tabset_id = "tabs"
+    ),
+    {
+      expect_null(sp_effectiveness_display())
+    }
+  )
+})
+
 # Run plumbing, diagnostics and export (P1-9) ----
 
 test_that("shock and loss-event inputs travel in the config and the flyout toggle does not", {
