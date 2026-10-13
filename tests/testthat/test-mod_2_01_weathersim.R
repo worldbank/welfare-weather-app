@@ -142,7 +142,8 @@ test_that("live_run lifecycle: submit, partials, adoption, cancel", {
     expect_identical(captured$snapshot$input$display$method, "mean")
     expect_length(lr$partials$scenarios, 0L)
 
-    job <- list2env(list(generation = lr$generation,
+    job <- list2env(list(id = "mock-job", artifact_dir = tempfile("mock-job-"),
+      generation = lr$generation,
       dependency_signature = lr$dependency_signature), parent = emptyenv())
     partial <- function(kind, label) list(schema = 1L, kind = kind, label = label,
       ordinal = 0L, groups_total = 4L)
