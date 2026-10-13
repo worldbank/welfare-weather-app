@@ -272,6 +272,22 @@ test_that("R2-A11Y-04: categorical series colours reach 3:1 on white", {
   expect_gte(ratio(.wise_marker_alt), 4.5)
 })
 
+test_that("CR-A11Y-09: the page keeps its lang and theme attributes", {
+  page <- bslib::page_navbar(title = "x", lang = "en", bslib::nav_panel("a", "b"))
+  out <- add_main_landmark(page)
+  expect_identical(attr(out, "lang"), "en")
+  expect_false(is.null(attr(out, "bs_theme")))
+  expect_identical(class(out), class(page))
+})
+
+test_that("CR-A11Y-09: custom.js repairs generated icon, tablist and separator markup", {
+  js <- paste(readLines(file.path("..", "..", "inst", "app", "www", "custom.js"), warn = FALSE),
+    collapse = "\n")
+  expect_match(js, "i[role=\"presentation\"][aria-label]", fixed = TRUE)
+  expect_match(js, "ul.navbar-nav[role=\"tablist\"] > li", fixed = TRUE)
+  expect_match(js, "aria-valuenow", fixed = TRUE)
+})
+
 test_that("R2-A11Y-05/06: untitled info icons are named by JS and have 24 px hit areas", {
   www <- file.path("..", "..", "inst", "app", "www")
   js <- paste(readLines(file.path(www, "custom.js"), warn = FALSE), collapse = "\n")

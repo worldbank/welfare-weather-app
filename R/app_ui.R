@@ -119,7 +119,10 @@ add_main_landmark <- function(page) {
     tags$a(class = "skip-link", href = "#main-content", "Skip to main content")
   )
   out <- tq$allTags()
-  class(out) <- class(page)
+  # allTags() drops the page's attributes (`lang`, `bs_theme`); Shiny reads
+  # `lang` for <html lang> (WCAG 3.1.1).
+  attributes(out) <- c(attributes(out)[setdiff(names(attributes(out)), names(attributes(page)))],
+    attributes(page))
   out
 }
 

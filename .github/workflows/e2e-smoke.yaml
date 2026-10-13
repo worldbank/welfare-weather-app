@@ -4,8 +4,8 @@
 #
 # Non-blocking for now: continue-on-error keeps a failure here from failing the
 # pull request. Make it required (remove continue-on-error and add the job to
-# branch protection) once it has been stable for a few runs. Set
-# WISEAPP_AXE_FAIL=1 below to fail on serious or critical axe violations.
+# branch protection) once it has been stable for a few runs. The script fails
+# on serious or critical axe violations (WISEAPP_AXE_FAIL=1).
 on:
   push:
     branches: [main, dev]
@@ -26,6 +26,7 @@ jobs:
       NOT_CRAN: "true"
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
+      WISEAPP_AXE_FAIL: "1"
       WISEAPP_E2E_OUT: ${{ runner.temp }}/e2e-out
     steps:
       - uses: actions/checkout@v4
