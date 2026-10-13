@@ -775,6 +775,17 @@
     stop("Asynchronous Step 2 execution is unavailable.", call. = FALSE)
   }
   state <- .wise_step2_async_state
+  # CR-SEC-07: a snapshot over the dispatcher cap is never accepted (the
+  # dispatch loop would requeue it for ever), so refuse it up front.
+  cap_mb <- .wise_step2_async_queue_memory()
+  snapshot_bytes <- if (is.null(cap_mb)) 0 else length(serialize(snapshot, NULL, version = 3L))
+  if (!is.null(cap_mb) && snapshot_bytes > cap_mb * 1024^2) {
+    stop(sprintf(
+      paste("The simulation inputs are too large for the background worker",
+        "(%.0f MB, limit %.0f MB; WISEAPP_ASYNC_QUEUE_MEMORY_MB)."),
+      snapshot_bytes / 1024^2, cap_mb
+    ), call. = FALSE)
+  }
   id <- .wise_step2_async_id()
   root <- .wise_step2_async_artifact_root()
   job_dir <- file.path(root, "jobs", id)
@@ -799,6 +810,7 @@
     seed = as.integer(seed),
     run_id = id,
     snapshot = snapshot,
+    snapshot_bytes = snapshot_bytes,
     dependency_signature = dependency_signature,
     dependency_signature_digest = digest,
     artifact_dir = job_dir,
@@ -852,6 +864,21 @@
     if (!is.null(active) && identical(active$session_id, job$session_id)) {
       .wise_step2_async_cancel(active$id, "Superseded by a newer run.")
     }
+  }
+
+  # CR-SEC-07: queued snapshots stay in this process until dispatch; bound
+  # their total (twice the per-job cap) so many sessions cannot pile them up.
+  queued_bytes <- sum(vapply(state$queue, function(queued_id) {
+    queued <- .wise_step2_async_job(queued_id)
+    if (is.null(queued)) 0 else as.numeric(queued$snapshot_bytes %||% 0)
+  }, numeric(1)))
+  if (!is.null(cap_mb) && queued_bytes + snapshot_bytes > 2 * cap_mb * 1024^2) {
+    .wise_step2_async_cleanup_job(job)
+    .wise_step2_async_cleanup_control(job)
+    stop(
+      "The background worker queue is full. Try again when a running simulation has finished.",
+      call. = FALSE
+    )
   }
 
   assign(id, job, envir = state$jobs)

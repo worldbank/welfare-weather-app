@@ -122,6 +122,55 @@ testthat::test_that("queued cancellation removes the job and its artifacts", {
   expect_identical(events[[1L]], "cancelled")
 })
 
+testthat::test_that("submit refuses an oversize snapshot and a full queue by bytes (CR-SEC-07)", {
+  state <- .wise_step2_async_state
+  old_queue <- state$queue
+  old_active <- state$active
+  on.exit({
+    state$queue <- old_queue
+    state$active <- old_active
+  }, add = TRUE)
+  withr::local_envvar(
+    WISEAPP_ASYNC_QUEUE_MEMORY_MB = "1",
+    WISEAPP_ASYNC_ARTIFACT_ROOT = withr::local_tempdir()
+  )
+  testthat::local_mocked_bindings(
+    .wise_step2_async_init = function(...) TRUE,
+    .wise_step2_async_dispatch = function(...) invisible(NULL)
+  )
+  state$queue <- list()
+  submit <- function(snapshot, session_id) {
+    .wise_step2_async_submit(
+      snapshot = snapshot, generation = 1L, session_id = session_id,
+      seed = 1L, dependency_signature = list(a = 1)
+    )
+  }
+
+  # Over the per-job cap (1 MB): refused, nothing queued, no leftover state.
+  expect_error(submit(list(big = runif(200000L)), "s0"), "too large")
+  expect_length(state$queue, 0L)
+
+  # 0.8 MB snapshots from different sessions: two fit under 2 x cap, the third
+  # does not and leaves no directories behind.
+  small <- function() list(x = runif(100000L))
+  jobs <- list(submit(small(), "s1"), submit(small(), "s2"))
+  on.exit(for (j in jobs) {
+    if (exists(j$id, envir = state$jobs, inherits = FALSE)) rm(list = j$id, envir = state$jobs)
+  }, add = TRUE)
+  expect_length(state$queue, 2L)
+  n_dirs <- length(list.files(.wise_step2_async_artifact_root(), recursive = TRUE, include.dirs = TRUE))
+  expect_error(submit(small(), "s3"), "queue is full")
+  expect_length(state$queue, 2L)
+  expect_identical(
+    length(list.files(.wise_step2_async_artifact_root(), recursive = TRUE, include.dirs = TRUE)),
+    n_dirs
+  )
+
+  # A newer run of the same session supersedes its queued job, so it fits.
+  expect_true(is.environment(submit(small(), "s1")))
+  expect_length(state$queue, 2L)
+})
+
 testthat::test_that("active cancellation retires and keeps the FIFO slot until the job settles", {
   state <- .wise_step2_async_state
   old_queue <- state$queue
