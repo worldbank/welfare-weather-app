@@ -168,13 +168,21 @@ mod_3_01_sp_server <- function(id,
       if (is.null(cols) || is.null(svy)) {
         return(character(0))
       }
-      cols <- cols[cols %in% names(svy) & vapply(
+      # A binned variable reaches the model as a category, but Step 2 keeps its
+      # continuous value in a companion `<var>_cont` column (P2-4): offer that.
+      companion <- vapply(cols, function(v) {
+        base <- sub("_cont$", "", v)
+        grepl("_cont$", v) && base %in% cols && !is.numeric(svy[[base]])
+      }, logical(1))
+      cols <- cols[companion | (cols %in% names(svy) & vapply(
         cols, function(v) is.numeric(svy[[v]]), logical(1)
-      )]
+      ))]
       vl <- tryCatch(variable_list(), error = function(e) NULL)
       labels <- vapply(cols, function(v) {
-        lbl <- if (is.data.frame(vl)) vl$label[vl$name == v] else character(0)
-        if (length(lbl) && !is.na(lbl[[1]]) && nzchar(lbl[[1]])) lbl[[1]] else v
+        base <- if (v %in% names(svy)) v else sub("_cont$", "", v)
+        lbl <- if (is.data.frame(vl)) vl$label[vl$name == base] else character(0)
+        lbl <- if (length(lbl) && !is.na(lbl[[1]]) && nzchar(lbl[[1]])) lbl[[1]] else base
+        if (identical(base, v)) lbl else paste0(lbl, " (continuous)")
       }, character(1))
       stats::setNames(cols, labels)
     })
@@ -195,8 +203,8 @@ mod_3_01_sp_server <- function(id,
           display_label = textOutput(ns("trigger_summary"), inline = TRUE),
           if (length(cands) == 0) {
             no_data_warning(
-              "No continuous weather variable is available. Run Step 2 first;",
-              "binned weather variables cannot drive a trigger."
+              "No continuous weather variable is available. Run Step 2 first",
+              "(a binned variable is used through its continuous value)."
             )
           } else {
             tagList(

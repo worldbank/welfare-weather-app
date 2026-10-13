@@ -456,6 +456,16 @@ run_sim_pipeline <- function(weather_raw,
   }
   n_pre_join <- nrow(svy)
 
+  # P2-4: the continuous companions of binned variables (`<var>_cont`) ride
+  # along in `weather_raw` (exposure table, reference store) but never enter
+  # the survey join or the prediction, so predictions are exactly those of a
+  # frame without them.
+  weather_full <- weather_raw
+  companions <- .weather_companion_cols(weather_raw, sw$name)
+  if (length(companions)) {
+    weather_raw <- weather_raw[, setdiff(names(weather_raw), companions), drop = FALSE]
+  }
+
   # Define is_rif once - all conditions in one place
   is_rif <- identical(engine, "rif") &&
     !is.null(fit_multi) &&
@@ -494,7 +504,7 @@ run_sim_pipeline <- function(weather_raw,
   # IDs are assigned before either join path so duplicate timestamps remain
   # distinguishable and cached/inline joins share the same mapping contract.
   weather_exposure_table <- .policy_exposure_table(
-    weather_raw, weather_columns = unique(c(sw$name, weather_cols))
+    weather_full, weather_columns = unique(c(sw$name, weather_cols, companions))
   )
   weather_join <- weather_raw
   weather_join$.policy_exposure_id <- seq_len(nrow(weather_join))
@@ -781,7 +791,7 @@ run_sim_pipeline <- function(weather_raw,
     svy_row_id  = svy_row_id,
     weather_exposure = .policy_exposure_compact(weather_exposure),
     n_pre_join  = n_pre_join,
-    weather_raw = weather_raw,
+    weather_raw = weather_full,
     train_aug   = train_aug
   )
   if (!is.null(prediction_profile)) {
@@ -792,6 +802,18 @@ run_sim_pipeline <- function(weather_raw,
     attr(result, "prediction_profile") <- do.call(rbind, prediction_profile$records)
   }
   result
+}
+
+# Continuous companion columns (`<var>_cont`, see `.apply_binning()`) present in
+# a weather frame for its binned (factor) variables.
+.weather_companion_cols <- function(weather, variables) {
+  if (!is.data.frame(weather)) {
+    return(character())
+  }
+  vars <- intersect(as.character(variables), names(weather))
+  vars <- vars[vapply(vars, function(v) is.factor(weather[[v]]), logical(1))]
+  cols <- .weather_companion_name(vars)
+  cols[cols %in% names(weather)]
 }
 
 .policy_exposure_key_cols <- c(

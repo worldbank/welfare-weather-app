@@ -101,7 +101,15 @@ Split `delta_sp_shock` out of Main into its own channel in the compact stats, le
 - Tests: identity before and after on a shock fixture; snapshot updates for exports; the three consumers agree. Hot-path benchmark.
 - Risk: the largest uncertainty in Phase 2 (touches snapshots and exports).
 
-### P2-4: Binned weather triggers (M, after P2-0a)
+### P2-4: Binned weather triggers (M, after P2-0a) ☑
+
+**Status (13 October 2026):** built, unit-tested and checked on real BFA data; not yet checked in a browser.
+
+- `get_weather(keep_continuous = FALSE)` and `.apply_binning(keep_continuous)` keep each binned variable's transformed pre-bin value in a numeric companion `<var>_cont` (historical frame and every member, one change in `.apply_binning()` serves all three call sites). Step 2 (`fct_run_simulation.R`, four call sites) asks for it; Step 1 weather statistics and every other caller are unchanged. The prepared-weather cache signature includes the flag, so no cache written before this is served.
+- `run_sim_pipeline()` strips the companions from the frame it joins and predicts with, so predictions cannot depend on them, and keeps them in `weather_raw` and the exposure table (`.weather_companion_cols()`). `.sp_trigger_variables()` already offers numeric exposure columns, so the companion qualifies and the binned factor does not; the Trigger flyout lists it as "<label> (continuous)" and reads its unit from the binned variable.
+- Equivalence gate (real BFA data, binned `t` and `spei6`, historical and one SSP / one period, ols and rif, old code from a git worktree against new): prediction fingerprints (`y_point`, `sim_year`, `svy_row_id`, `weight` of the historical arm and every member) identical in all four cases. Cost: result object +9.9 MB (historical) and +94.4 MB (one SSP, one period), matching the P2-0a estimate; weather stage 2.0 / 10.4 s vs 2.1 / 10.7 s, pipelines and parent peak RSS within run-to-run noise. The harness gained `prediction_fingerprint` (ignores stored weather) for this kind of comparison. Not run on ranger or xgboost fits, which cannot see the companions by construction (the joined frame never has them).
+- End to end: the Step 3 harness shock fixture runs on binned BFA weather with the companion as its trigger variable (status ok, correction loop 7.9 s, in line with the continuous case).
+- Tests: `test-weather-continuous-companion.R` (companion only when asked, same bins, bit-identical predictions with and without it for inline and cached joins, exposure table, trigger thresholds on the companion, binned variable refused, flyout candidates and units). The exposure-mapping fixture moved to `helper-policy-exposure.R` because two files use it.
 
 Option 1 from plan section 3.2 if P2-0a passes: companion continuous column kept before `.apply_binning()` in the historical slice and every member, added to `weather_columns`, offered through `.sp_trigger_variables()` with its unit.
 

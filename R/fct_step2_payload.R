@@ -98,7 +98,10 @@ STEP2_PREPARED_WEATHER_CACHE_VERSION <- "v2"
     stored_breaks = stored_breaks,
     epsilon = epsilon,
     weather_source = weather_source,
-    proj_source = proj_source
+    proj_source = proj_source,
+    # P2-4: Step 2 frames carry a continuous companion for binned variables, so
+    # a cache written before that cannot be served
+    keep_continuous = TRUE
   ) |>
     digest::digest(algo = "sha256")
 }

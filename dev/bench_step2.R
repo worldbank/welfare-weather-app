@@ -564,6 +564,19 @@ inputs_by_country <- setNames(
   digest::digest(stable, algo = "xxhash64", serialize = TRUE)
 }
 
+# Predictions only: y_point, year and survey-row identity of the historical arm
+# and every member. Unlike `.bench_fingerprint()` it ignores stored weather, so it
+# stays comparable across changes to the weather payload (for example the P2-4
+# continuous companion columns).
+.bench_prediction_fingerprint <- function(value) {
+  pipe <- function(p) p[intersect(c("y_point", "sim_year", "svy_row_id", "weight"), names(p))]
+  members <- lapply(value$new_scenarios %||% list(), function(s) lapply(s$pipelines, pipe))
+  digest::digest(
+    list(historical = pipe(value$hist_sim_result$pipeline), members = members),
+    algo = "xxhash64", serialize = TRUE
+  )
+}
+
 .bench_state <- function() {
   state <- new.env(parent = emptyenv())
   state$weather_elapsed <- NA_real_
@@ -1010,6 +1023,8 @@ inputs_by_country <- setNames(
     result_serialized_bytes = result_size$serialized_bytes,
     result_deduplicated_bytes = result_size$deduplicated_bytes,
     result_fingerprint = result_fingerprint,
+    prediction_fingerprint = if (is.null(result)) NA_character_ else
+      .bench_prediction_fingerprint(result),
     weather_raw_count = state$weather_raw_count,
     weather_raw_bytes_total = sum(state$weather_raw_sizes, na.rm = TRUE),
     weather_cache_files_before = state$cache_files_before,

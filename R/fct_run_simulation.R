@@ -248,7 +248,8 @@ prepare_weather_manifest <- function(
         weather_collect = weather_collect, weather_threads = weather_threads,
         weather_consumer = function(key, weather, metadata = NULL) {
           frames[[key]] <<- weather
-        }
+        },
+        keep_continuous = TRUE
       ),
       error = function(e) {
         if (length(frames)) stop(e)
@@ -259,7 +260,8 @@ prepare_weather_manifest <- function(
           future_period = if (length(ssps)) fp_list else NULL,
           perturbation_method = perturbation_method, stored_breaks = stored_breaks,
           epsilon = epsilon, weather_source = weather_source, proj_source = proj_source,
-          weather_collect = weather_collect, weather_threads = weather_threads
+          weather_collect = weather_collect, weather_threads = weather_threads,
+          keep_continuous = TRUE
         )
       }
     )
@@ -1031,7 +1033,7 @@ fct_run_simulation <- function(sw,
       future_period = if (has_future) fp_list else NULL,
       perturbation_method = perturbation_method, stored_breaks = stored_breaks,
       weather_collect = weather_collect, weather_threads = weather_threads,
-      weather_consumer = consume_key
+      weather_consumer = consume_key, keep_continuous = TRUE
     ),
     error = function(e) {
       if (inherits(e, "wiseapp_step2_cancelled")) stop(e)
@@ -1043,11 +1045,11 @@ fct_run_simulation <- function(sw,
         future_period = if (has_future) fp_list else NULL,
         perturbation_method = perturbation_method,
         stored_breaks = stored_breaks, weather_collect = weather_collect,
-        weather_threads = weather_threads
+        weather_threads = weather_threads, keep_continuous = TRUE
       )
     }
   )
-  t_weather <- proc.time()[["elapsed"]] - t_weather_start
+  t_weather <-proc.time()[["elapsed"]] - t_weather_start
   progress_fn(0.35, "Climate data loaded. Running scenarios...")
   if (is.list(weather_result) && length(weather_result)) {
     for (key in setdiff(names(weather_result), emitted_keys)) {

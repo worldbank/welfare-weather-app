@@ -935,17 +935,23 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
 }
 
 
+.weather_companion_name <- function(v) paste0(v, "_cont")
+
 #' Apply pre-computed bin breaks to weather columns in a data frame.
 #'
 #' @param df     Collected data frame.
 #' @param breaks Named list of break vectors as returned by `.compute_breaks()`.
-#'
+#' @param keep_continuous Keep each binned variable's value before `cut()` in a
+#'   numeric companion column `<var>_cont` (P2-4), so a trigger can read the
+#'   hazard itself. The companion is never a model term: the simulation joins
+#'   and predicts without it.
 #' @return `df` with binned columns converted to factors via `cut()` and using
 #'   the same display-safe levels as the fitted model data.
 #' @noRd
-.apply_binning <- function(df, breaks) {
+.apply_binning <- function(df, breaks, keep_continuous = FALSE) {
   for (v in names(breaks)) {
     if (v %in% names(df)) {
+      if (isTRUE(keep_continuous)) df[[.weather_companion_name(v)]] <- df[[v]]
       df[[v]] <- cut(df[[v]], breaks = breaks[[v]], include.lowest = TRUE)
     }
   }
@@ -1155,6 +1161,11 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
 #'   `weather_consumer(key, data, info)` for the historical frame and each
 #'   future member as it is produced, instead of accumulating them in the
 #'   returned list. `info` carries the emission order and period membership.
+#' @param keep_continuous Logical. When `TRUE`, every binned variable also
+#'   leaves a numeric companion column `<var>_cont` holding its (transformed)
+#'   value before binning, in the historical frame and in every future member.
+#'   Step 2 sets it so a shock-responsive trigger can use a binned variable.
+#'   Default `FALSE`: the frames are exactly as before.
 #' @return A named list of collected data frames with columns
 #'   `code, year, survname, loc_id, timestamp, <weather_vars>`:
 #'   * `"historical"` - unperturbed result filtered to `dates`.
@@ -1185,7 +1196,8 @@ get_weather <- function(
   stored_breaks = NULL,
   weather_collect = c("fast", "bounded"),
   weather_threads = c("auto", "1", "2"),
-  weather_consumer = NULL
+  weather_consumer = NULL,
+  keep_continuous = FALSE
 ) {
   # The async Step 2 worker passes dates as character. Coerce once so the
   # climate-reference window (max() against a Date below), the date filters
@@ -1655,7 +1667,9 @@ get_weather <- function(
     }
 
     # Apply to historical slice immediately
-    result[["historical"]] <- .apply_binning(result[["historical"]], stored_breaks)
+    result[["historical"]] <- .apply_binning(
+      result[["historical"]], stored_breaks, keep_continuous
+    )
   }
 
   emitted_order <- 0L
@@ -2148,7 +2162,9 @@ get_weather <- function(
               lapply(model_list, function(model_df) {
                 model_df$model <- NULL
                 model_df <- .wx_round_weather_values(model_df, weather_vars)
-                if (has_binning) model_df <- .apply_binning(model_df, stored_breaks)
+                if (has_binning) {
+                  model_df <- .apply_binning(model_df, stored_breaks, keep_continuous)
+                }
                 model_df
               }),
               paste0(ssp_i, "_", fp_label, "_", make.names(names(model_list)))
@@ -2181,7 +2197,9 @@ get_weather <- function(
             }
             model_df <- .profile_timed("future_round_bin", {
               model_df <- .wx_round_weather_values(model_df, weather_vars)
-              if (has_binning) model_df <- .apply_binning(model_df, stored_breaks)
+              if (has_binning) {
+                model_df <- .apply_binning(model_df, stored_breaks, keep_continuous)
+              }
               model_df
             }, detail = paste(ssp_i, fp_label, model_name))
             member_key <- paste0(ssp_i, "_", fp_label, "_", make.names(model_name))

@@ -83,9 +83,10 @@ SP_PAYOUT_SCOPES <- c("local", "national_triggered", "national_all")
 #' Weather columns that can drive a trigger
 #'
 #' A trigger needs a continuous value. Binned variables reach the exposure table
-#' as bin labels (character or factor), so only numeric columns qualify; the unit
-#' is whatever the variable's transformation implies (physical units, deviation
-#' or standardized anomaly).
+#' as bin labels (character or factor), which do not qualify; only numeric
+#' columns do, among them the continuous companion `<var>_cont` that Step 2 keeps
+#' for each binned variable (P2-4). The unit is whatever the variable's
+#' transformation implies (physical units, deviation or standardized anomaly).
 #'
 #' @param exposure Exposure table (`.policy_exposure_table()` layout).
 #' @return Character vector of column names.
@@ -115,6 +116,10 @@ SP_PAYOUT_SCOPES <- c("local", "national_triggered", "national_all")
     return("")
   }
   row <- which(selected_weather$name == variable)[1L]
+  if (is.na(row) && grepl("_cont$", variable)) {
+    # The continuous companion of a binned variable has the variable's unit
+    row <- which(selected_weather$name == sub("_cont$", "", variable))[1L]
+  }
   if (is.na(row)) {
     return("")
   }
@@ -166,7 +171,8 @@ sp_trigger_thresholds <- function(hist_exposure, spec) {
   if (!var %in% .sp_trigger_variables(hist_exposure)) {
     .sp_trigger_abort(paste0(
       "The trigger variable '", var, "' is not a continuous weather variable ",
-      "in the exposure table (binned variables cannot drive a trigger)."
+      "in the exposure table (a binned variable is used through its continuous ",
+      "companion; re-run Step 2 if it is missing)."
     ))
   }
   if (identical(type, "weather")) {
