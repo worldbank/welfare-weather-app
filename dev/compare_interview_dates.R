@@ -6,9 +6,9 @@
 source("R/utils_plot_theme.R")
 source("R/fct_surveystats.R")
 
-data_root <- path.expand(
-  "~/Library/CloudStorage/OneDrive-WBG/wiseapp - Documents"
-)
+data_root <- Sys.getenv("WISEAPP_DATA_PATH", unset = "")
+if (!nzchar(data_root)) stop("Set WISEAPP_DATA_PATH to the local data folder.")
+data_root <- path.expand(data_root)
 country_codes <- c("BEN", "BFA")
 survey_files <- unlist(lapply(country_codes, function(code) {
   list.files(

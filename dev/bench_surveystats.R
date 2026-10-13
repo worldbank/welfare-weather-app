@@ -7,9 +7,8 @@
 # WISEAPP_BENCH_CC=BFA for the smaller BFA payload (guidelines §9).
 #
 # Usage:
-#   WISEAPP_DATA_PATH="~/Library/CloudStorage/OneDrive-WBG/wiseapp - Documents" \
-#     Rscript dev/bench_surveystats.R
-#   WISEAPP_BENCH_CC=BFA WISEAPP_DATA_PATH=... Rscript dev/bench_surveystats.R
+#   Rscript dev/bench_surveystats.R   (WISEAPP_DATA_PATH set in .Renviron)
+#   WISEAPP_BENCH_CC=BFA Rscript dev/bench_surveystats.R
 #
 # Alternatives benchmarked against the shipped collapse implementation:
 #   - .wsl_nocopy : collapse grouped passes directly on the data.frame,
@@ -37,8 +36,7 @@ devtools::load_all(quiet = TRUE)
 
 data_path <- Sys.getenv("WISEAPP_DATA_PATH", unset = "")
 if (!nzchar(data_path)) stop(
-  "bench_surveystats: Set WISEAPP_DATA_PATH to the local data folder ",
-  "(e.g. ~/Library/CloudStorage/OneDrive-WBG/wiseapp - Documents)"
+  "bench_surveystats: Set WISEAPP_DATA_PATH to the local data folder."
 )
 data_path <- normalizePath(data_path, mustWork = TRUE)
 bench_cc <- toupper(Sys.getenv("WISEAPP_BENCH_CC", unset = "IRN"))

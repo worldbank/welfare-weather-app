@@ -5,7 +5,6 @@
 # fast thread/rounding characterization before running any broader benchmark.
 #
 # Example:
-#   WISEAPP_DATA_PATH="$HOME/Library/CloudStorage/OneDrive-WBG/wiseapp - Documents" \
 #   WISEAPP_WEATHER_COUNTRY=COL \
 #   WISEAPP_WEATHER_YEAR=2018 \
 #   WISEAPP_WEATHER_VAR=t \

@@ -4,7 +4,7 @@
 // headcount_ratio, poverty_gap, poverty_severity (fgt2), gini,
 // prosperity_gap, avg_poverty.
 //
-// Parity contract (mandatory, see review/optimize_aggregation_welfare.md):
+// Parity contract (mandatory):
 // each statistic mirrors the exact NA/Inf/weight rules of its
 // `resolve_agg_fn()` implementation:
 //   mean/headcount/prosperity_gap use

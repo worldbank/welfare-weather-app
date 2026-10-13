@@ -17,7 +17,7 @@ Architecture overview is in `AGENTS.md`; constraints it does not cover:
 - Existing bounded caches (e.g. the aggregation preparation cache in `fct_aggregation.R`) must stay bounded per Section 4.
 - `DT`, `ggplot2`, and synchronous `future.apply` are still in use, so Sections 6–8 describe migration targets, not the status quo.
 
-**Candidate opportunities** (`review/optimize_*.md` — considered for implementation, never enforced): `optimize_get_weather.md` (weather pipeline), `optimize_rif.md` (RIF quantile regression), `optimize_aggregation_welfare.md` (welfare statistics aggregation). Each is a ranked list of remaining speed opportunities with expected impact, parity risks, and traps found in earlier proposals — read the relevant one before touching that area, verify against the current code, and benchmark per Section 9 before adopting.
+**Archived opportunity lists**: the earlier ranked speed-opportunity lists (`optimize_get_weather.md`, `optimize_rif.md`, `optimize_aggregation_welfare.md`) are in `review/archive/`. They are history, not current guidance: read the relevant one for parity risks and traps before touching that area, verify against the current code, and benchmark per Section 9 before adopting anything from them.
 
 ## 1. Data Layer: Zero-Copy & Out-of-Core Processing
 
@@ -95,7 +95,7 @@ Standard: `ExtendedTask` (UI/session layer) + `mirai` (worker backend).
 
 ## 9. Benchmarking
 
-Benchmark optimizations against real app data before merging, using the local dataset folder: `~/Library/CloudStorage/OneDrive-WBG/wiseapp - Documents`.
+Benchmark optimizations against real app data before merging, using the local dataset folder given by `WISEAPP_DATA_PATH` (set in `.Renviron`).
 
 - Reuse the existing benchmark harness (`dev/bench_*.R`, `dev/run_step2_benchmark.sh`, results under `dev/outputs/`) rather than writing ad-hoc timing scripts.
 - **Smaller payload**: BFA surveys (all years), default weather and climate scenario.

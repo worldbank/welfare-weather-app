@@ -19,9 +19,8 @@ env_int <- function(name, default) {
 }
 
 backend <- env("WISEAPP_W3_BACKEND", "local")
-data_path <- normalizePath(path.expand(env(
-  "WISEAPP_DATA_PATH", "~/Library/CloudStorage/OneDrive-WBG/wiseapp - Documents"
-)), mustWork = FALSE)
+if (!nzchar(env("WISEAPP_DATA_PATH"))) stop("Set WISEAPP_DATA_PATH to the local data folder.")
+data_path <- normalizePath(path.expand(env("WISEAPP_DATA_PATH")), mustWork = FALSE)
 country <- env("WISEAPP_W3_COUNTRY", "LKA")
 survey_years <- as.integer(strsplit(env(
   "WISEAPP_W3_SURVEY_YEARS", if (country == "LKA") "2012,2016" else "2009,2020"

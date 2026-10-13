@@ -15,9 +15,11 @@
 
 pkgload::load_all(quiet = TRUE)
 
+data_root <- Sys.getenv("WISEAPP_DATA_PATH", unset = "")
+if (!nzchar(data_root)) stop("Set WISEAPP_DATA_PATH to the local data folder.")
 data_dir <- Sys.getenv(
   "WISEAPP_RIF_BENCH_DATA",
-  "~/Library/CloudStorage/OneDrive-WBG/wiseapp - Documents/microdata/hh"
+  file.path(data_root, "microdata", "hh")
 )
 iterations <- as.integer(Sys.getenv("WISEAPP_RIF_BENCH_ITERATIONS", "20"))
 taus <- seq(0.1, 0.9, by = 0.1)
