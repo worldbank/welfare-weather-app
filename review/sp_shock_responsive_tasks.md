@@ -84,7 +84,15 @@ Climate-adjusted cost; coverage of the shock-affected poor; adequacy; poverty ef
 - Done when: metrics match hand calculations on a small panel; the "not reported for a shock program" notice is gone; exports carry the new tables; poverty line absent shows "Not available"; the tab is empty-state safe when the SP lever is off.
 - Tests: extend `test-fct_sp_shock.R` and `test-fct_sp_effectiveness.R`; export test; a module render test; `app_server` wiring test.
 
-### P2-3: Separate decomposition channel (L)
+### P2-3: Separate decomposition channel (L) ☑
+
+**Status (13 October 2026):** built, unit-tested and benchmarked on BFA; not yet checked in a browser. Both decompositions carry the shock-responsive transfer as its own channel; a regular run has the channel at exactly 0 and shows nothing new.
+
+- Compact (Decomposition tab) stats: new channels `delta_sp_shock` and `lvl_sp_shock` (`.compact_decomp_channels`, `.compact_level_channels`); `delta_main`, `delta_sp` and `lvl_main` are now the static values, so static + shock is the old combined value. Repositioning, interaction and the totals are computed from the combined effect and do not change. Compact frames built before this change read the new channels as 0 (`.compact_optional_channels`).
+- Metric-aware states (Results cards, tails): five states (baseline, after static main, after main, after repositioning, policy) and a new `sp_shock` contribution; `main` is static; `main + sp_shock + repositioning + interaction = total`. Without a shock program the extra state is copied, not aggregated again.
+- Presentation: the headline chart, decile chart, decile table and exports show "Shock-responsive transfer" only when it carries an effect; the Results resilience card popover lists it beside the main effect.
+- Tests: identity of static + shock against the household-level channels of the same run for identity and log outcomes, level channels adding to the level total, a regular run (zero channel, `after_static_main == after_main`, no shock row in the summary), the headline summary with and without the channel, and updated fixtures in `test-fct-policy-metric-decompose.R` and `test-sp-shock-correction.R`.
+- Benchmark (BFA, ols, one SSP and one period, 3 repetitions; before = 87aaf15): correction loop (`policy_seconds`, median) shock 7.34 s -> 7.59 / 7.63 s (+0.25 s, +3.5 %), regular 3.67 s -> 3.74 / 3.87 s (noise); metric decomposition job (`metric_headcount_ratio_seconds`) shock 4.09 -> 4.28 / 4.45 s, regular 2.57 -> 2.65 / 2.66 s; peak parent RSS not higher (3.04 / 3.07 GB). The harness output fingerprint changes for all four cases because it hashes the compact channel summary, which has new columns; the old columns were not byte-compared on BFA (the tests prove the identities instead).
 
 Split `delta_sp_shock` out of Main into its own channel in the compact stats, level channels, summaries and exports. Numbers must not change, only grouping.
 

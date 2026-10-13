@@ -158,13 +158,23 @@
 
 # Household-level channel changes in outcome units. For log outcomes this is
 # the same conversion as `.decomposition_outcome_channels()`.
+#
+# P2-3: the shock-responsive transfer (`ch$delta_sp_shock`, zero without a shock
+# program) is its own last column. The first column is then the static main
+# effect, and main + shock is the old combined Main: repositioning, interaction
+# and total are computed from the combined `delta_main`, so they do not change.
 .policy_level_channels <- function(ch, is_log, baseline) {
-  if (!is_log) return(cbind(ch$delta_main, ch$delta_res1, ch$delta_res2, ch$delta_total))
+  shock <- ch$delta_sp_shock %||% 0
+  if (!is_log) {
+    return(cbind(ch$delta_main - shock, ch$delta_res1, ch$delta_res2, ch$delta_total, shock))
+  }
+  main_static <- (exp(ch$delta_main - shock) - 1) * baseline
   cbind(
-    (exp(ch$delta_main) - 1) * baseline,
+    main_static,
     exp(ch$delta_main) * (exp(ch$delta_res1) - 1) * baseline,
     exp(ch$delta_main + ch$delta_res1) * (exp(ch$delta_res2) - 1) * baseline,
-    (exp(ch$delta_main + ch$delta_res1 + ch$delta_res2) - 1) * baseline
+    (exp(ch$delta_main + ch$delta_res1 + ch$delta_res2) - 1) * baseline,
+    (exp(ch$delta_main) - 1) * baseline - main_static
   )
 }
 
@@ -327,8 +337,13 @@
       weights <- if (is.null(pipeline$weight)) rep(1, length(rows)) else pipeline$weight[rows]
       valid <- is.finite(weights) & weights > 0
       weights[!valid] <- 0
-      values <- cbind(ch$delta_total, ch$delta_main, ch$delta_sp,
-        ch$delta_main_covar, ch$delta_res1 + ch$delta_res2, ch$delta_res1, ch$delta_res2)
+      # P2-3: Main and the cash-transfer channel are the static ones; the
+      # shock-responsive transfer is its own (last) channel. Static + shock is
+      # the old combined value, and the total is unchanged.
+      shock_ch <- ch$delta_sp_shock %||% 0
+      values <- cbind(ch$delta_total, ch$delta_main - shock_ch, ch$delta_sp - shock_ch,
+        ch$delta_main_covar, ch$delta_res1 + ch$delta_res2, ch$delta_res1, ch$delta_res2,
+        shock_ch)
       stats <- matrix(0, length(rows), length(stat_names))
       channel_count <- length(.compact_decomp_channels) * 2L
       stats[, seq.int(1L, channel_count, 2L)] <- values * weights
@@ -488,12 +503,20 @@
   c(list(status = "ok"), out)
 }
 
-.policy_metric_fields <- c("baseline", "after_main", "after_repositioning", "policy",
-  "main", "repositioning", "interaction", "resilience", "total")
+# Cumulative states in order, then the contributions between them. P2-3: the
+# shock-responsive transfer has its own state and contribution between the
+# static main effect and repositioning; without a shock program `after_main`
+# equals `after_static_main` and `sp_shock` is 0, so `main + sp_shock` is the
+# old combined Main and every other value is unchanged.
+.policy_metric_fields <- c("baseline", "after_static_main", "after_main",
+  "after_repositioning", "policy", "main", "sp_shock", "repositioning",
+  "interaction", "resilience", "total")
+.policy_metric_n_states <- 5L
 .policy_metric_tolerance <- 1e-8
 
 .policy_metric_contributions <- function(levels) {
-  levels$main <- levels$after_main - levels$baseline
+  levels$main <- levels$after_static_main - levels$baseline
+  levels$sp_shock <- levels$after_main - levels$after_static_main
   levels$repositioning <- levels$after_repositioning - levels$after_main
   levels$interaction <- levels$policy - levels$after_repositioning
   levels$resilience <- levels$repositioning + levels$interaction
@@ -514,7 +537,7 @@
 
 .policy_metric_tails <- function(annual, scenario, adverse_tail,
                                  baseline_series = NULL, required_models = NULL) {
-  states <- .policy_metric_fields[1:4]
+  states <- .policy_metric_fields[seq_len(.policy_metric_n_states)]
   annual_models <- if (is.data.frame(annual) && "model_id" %in% names(annual)) {
     split(annual, as.character(annual$model_id))
   } else list()
@@ -713,24 +736,38 @@
       resid_lookup = lookup, resid_sigma2 = sigma2)
     w <- if (!is.null(baseline$weight)) as.numeric(baseline$weight[rows]) else NULL
     row_deciles <- deciles[baseline$svy_row_id[rows]]
-    excluded <- integer(4)
-    deltas <- list(rep(0, length(rows)), ch$delta_main, ch$delta_res1, ch$delta_res2)
-    values <- numeric(4)
-    state_values <- vector("list", 4L)
-    for (j in seq_len(4)) {
+    n_states <- .policy_metric_n_states
+    excluded <- integer(n_states)
+    # States: baseline, + static main, + shock-responsive transfer, +
+    # repositioning, + interaction. Without a shock program the third state is
+    # the second, so it is not aggregated again.
+    shock_ch <- ch$delta_sp_shock
+    deltas <- list(rep(0, length(rows)),
+      if (is.null(shock_ch)) ch$delta_main else ch$delta_main - shock_ch,
+      shock_ch, ch$delta_res1, ch$delta_res2)
+    values <- numeric(n_states)
+    state_values <- vector("list", n_states)
+    for (j in seq_len(n_states)) {
+      if (j == 3L && is.null(shock_ch)) {
+        state_values[[j]] <- state_values[[2L]]
+        values[j] <- values[2L]
+        excluded[j] <- excluded[2L]
+        next
+      }
       if (j > 1L) y <- y + deltas[[j]]
       mu <- if (is_log) exp(y + residual) else y + residual
       state_values[[j]] <- mu
       values[j] <- aggregate(mu, w, pov_line)
       excluded[j] <- sum(!is.finite(mu) | (method == "avg_poverty" & mu <= 0))
     }
-    names(values) <- .policy_metric_fields[1:4]
+    names(values) <- .policy_metric_fields[seq_len(n_states)]
     annual[[length(annual) + 1L]] <- data.frame(scenario = scenario, member = member,
       model_id = member, sim_year = year, .policy_metric_contributions(as.list(values)),
       n_prediction_rows = length(all_rows), n_retained_rows = length(rows),
       n_excluded_rows = length(all_rows) - length(rows),
-      excluded_baseline = excluded[1L], excluded_after_main = excluded[2L],
-      excluded_after_repositioning = excluded[3L], excluded_policy = excluded[4L],
+      excluded_baseline = excluded[1L], excluded_after_static_main = excluded[2L],
+      excluded_after_main = excluded[3L],
+      excluded_after_repositioning = excluded[4L], excluded_policy = excluded[5L],
       parity_error = error, requested_residuals = requested_residuals, effective_residuals = effective)
     in_decile <- is.finite(row_deciles) & row_deciles >= 1 & row_deciles <= 10
     valid_deciles <- sort(unique(row_deciles[in_decile]))
@@ -739,10 +776,17 @@
     for (k in seq_along(valid_deciles)) {
       decile <- valid_deciles[[k]]
       selected <- decile_rows[[k]]
-      decile_states <- lapply(state_values, function(mu) aggregate(
-        mu[selected], if (is.null(w)) NULL else w[selected], pov_line
-      ))
-      names(decile_states) <- .policy_metric_fields[1:4]
+      decile_states <- vector("list", n_states)
+      for (j in seq_len(n_states)) {
+        decile_states[[j]] <- if (j == 3L && is.null(shock_ch)) {
+          decile_states[[2L]]
+        } else {
+          aggregate(
+            state_values[[j]][selected], if (is.null(w)) NULL else w[selected], pov_line
+          )
+        }
+      }
+      names(decile_states) <-.policy_metric_fields[seq_len(n_states)]
       decile_annual[[length(decile_annual) + 1L]] <- c(list(scenario = scenario,
         member = member, model_id = member, sim_year = year, decile = as.integer(decile)),
         .policy_metric_contributions(decile_states),

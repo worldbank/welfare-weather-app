@@ -38,6 +38,9 @@
   by_model <- lapply(names(supports), function(m) {
     r <- rows[as.character(rows$member) == m, , drop = FALSE]
     vapply(fields, function(f) {
+      if (f %in% .compact_optional_channels && is.null(r[[paste0("sum_", f)]])) {
+        return(0)
+      }
       value <- r[[paste0("sum_", f)]] / r[[paste0("weight_", f)]]
       apply_adverse_year_support(value, as.numeric(r$sim_year), supports[[m]])$value
     }, numeric(1))
@@ -87,6 +90,7 @@
       resilience_log = values[["delta_res"]],
       total_log = values[["delta_total"]],
       main = values[["lvl_main"]],
+      shock = values[["lvl_sp_shock"]],
       repositioning = values[["lvl_res1"]],
       interaction = values[["lvl_res2"]],
       total = values[["lvl_total"]],
@@ -94,6 +98,7 @@
       resilience_percent = log_effect_to_percent(values[["delta_res"]]),
       main_percent = log_effect_to_percent(values[["delta_main"]]),
       cash_transfer_percent = log_effect_to_percent(values[["delta_sp"]]),
+      shock_percent = log_effect_to_percent(values[["delta_sp_shock"]]),
       covariate_shift_percent = log_effect_to_percent(values[["delta_main_covar"]]),
       repositioning_percent = log_effect_to_percent(values[["delta_res1"]]),
       interaction_percent = log_effect_to_percent(values[["delta_res2"]]),
@@ -106,14 +111,20 @@
   if (!nrow(out)) tibble::tibble() else out
 }
 
+#   delta_main and delta_sp are the static ones; the shock-responsive transfer is
+#   `delta_sp_shock` (P2-3), so delta_main + delta_sp_shock is the old Main.
 .compact_decomp_channels <- c(
   "delta_total", "delta_main", "delta_sp", "delta_main_covar",
-  "delta_res", "delta_res1", "delta_res2"
+  "delta_res", "delta_res1", "delta_res2", "delta_sp_shock"
 )
 
-# Main / repositioning / interaction / total in outcome units, converted per
-# household before aggregation (see `.policy_level_channels()`).
-.compact_level_channels <- c("lvl_main", "lvl_res1", "lvl_res2", "lvl_total")
+# Main / repositioning / interaction / total / shock-responsive transfer in
+# outcome units, converted per household before aggregation (see
+# `.policy_level_channels()`). `lvl_main` is the static main effect.
+.compact_level_channels <- c("lvl_main", "lvl_res1", "lvl_res2", "lvl_total", "lvl_sp_shock")
+
+# Channels that compact frames built before P2-3 do not carry; they read as 0.
+.compact_optional_channels <- c("delta_sp_shock", "lvl_sp_shock")
 
 .bind_compact_future_decompositions <- function(parts, engine = NULL,
                                                 is_rif = FALSE) {
@@ -177,8 +188,13 @@
   channels <- c(.compact_decomp_channels, .compact_level_channels)
   out <- setNames(numeric(length(channels)), channels)
   for (name in channels) {
-    out[[name]] <- .compact_member_mean(
-      rows, paste0(prefix, "sum_", name), paste0(prefix, "weight_", name))
+    out[[name]] <- if (name %in% .compact_optional_channels &&
+      is.null(rows[[paste0(prefix, "sum_", name)]])) {
+      0
+    } else {
+      .compact_member_mean(
+        rows, paste0(prefix, "sum_", name), paste0(prefix, "weight_", name))
+    }
   }
   out
 }
@@ -405,8 +421,9 @@ mod_3_09_decomposition_server <- function(id,
       if (!.is_compact_decomp_scenarios(compact)) return(data.frame())
       res <- .compact_future_decomp(compact, scenario, basis, so())
       if (!nrow(res)) return(res)
-      data.frame(delta_main = res$lvl_main, delta_res1 = res$lvl_res1,
-        delta_res2 = res$lvl_res2, delta_total = res$lvl_total, weight = 1)
+      data.frame(delta_main = res$lvl_main, delta_sp_shock = res$lvl_sp_shock,
+        delta_res1 = res$lvl_res1, delta_res2 = res$lvl_res2,
+        delta_total = res$lvl_total, weight = 1)
     }
     headline_decomp_res <- reactive({
       if (isTRUE(stale()) || !identical(policy_method_status()$status, "ok")) return(data.frame())
@@ -527,7 +544,16 @@ mod_3_09_decomposition_server <- function(id,
       if (!nrow(data) || !is_relative()) return(data)
       .decomposition_as_relative(data,
         .decomposition_baseline_mean(so(), baseline_svy(), data$decile),
-        c("main", "repositioning", "interaction", "total"))
+        c("main", "shock", "repositioning", "interaction", "total"))
+    }
+    # Channel columns of the decile table and export; the shock-responsive
+    # transfer appears only when it carries an effect (regular runs: unchanged).
+    decile_channel_cols <- function(data) {
+      cols <- c(main = "Main effect", shock = "Shock-responsive transfer",
+        repositioning = "Repositioning", interaction = "Interaction",
+        total = "Total policy effect")
+      if (!.decomposition_shock_active(data$shock)) cols <- cols[names(cols) != "shock"]
+      cols
     }
     decile_decomp_data <- reactive({
       if (isTRUE(stale()) || !identical(policy_method_status()$status, "ok")) return(data.frame())
@@ -538,7 +564,8 @@ mod_3_09_decomposition_server <- function(id,
       deciles <- .compact_future_decile_summary(compact, scenario, basis, so(), is_rif())
       if (!nrow(deciles)) return(data.frame())
       decile_relative(.decomposition_outcome_deciles(data.frame(decile = deciles$decile,
-        delta_main = deciles$main, delta_res1 = deciles$repositioning,
+        delta_main = deciles$main, delta_sp_shock = deciles$shock,
+        delta_res1 = deciles$repositioning,
         delta_res2 = deciles$interaction, delta_total = deciles$total,
         weight = deciles$weighted_population), so_levels(), baseline_svy()))
     })
@@ -571,9 +598,9 @@ mod_3_09_decomposition_server <- function(id,
       if (!nrow(data)) return(.step2_reactable_note(
         "Decomposition data is not available for this selection."))
       unit <- change_unit_text()
-      channels <- data[c("main", "repositioning", "interaction", "total")]
-      names(channels) <- paste(c("Main effect", "Repositioning", "Interaction", "Total policy effect"),
-        paste0("(", unit, ")"))
+      cols <- decile_channel_cols(data)
+      channels <- data[names(cols)]
+      names(channels) <- paste(unname(cols), paste0("(", unit, ")"))
       table <- stats::setNames(data.frame(data$decile, channels, check.names = FALSE),
         c("Baseline welfare decile", names(channels)))
       num_defs <- stats::setNames(
@@ -604,9 +631,9 @@ mod_3_09_decomposition_server <- function(id,
         data <- decile_decomp_data()
         if (!nrow(data)) return(data.frame(Message = "Decomposition data is not available for this selection."))
         unit <- change_unit_text()
-        channels <- data[c("main", "repositioning", "interaction", "total")]
-        names(channels) <- paste(c("Main effect", "Repositioning", "Interaction", "Total policy effect"),
-          paste0("(", unit, ")"))
+        cols <- decile_channel_cols(data)
+        channels <- data[names(cols)]
+        names(channels) <- paste(unname(cols), paste0("(", unit, ")"))
         stats::setNames(data.frame(data$decile, channels, check.names = FALSE),
           c("Baseline welfare decile", names(channels)))
       },

@@ -62,16 +62,22 @@
         .decomp_weights(baseline_svy)
       ), nrow(decomp_df))
     }
+    # The shock-responsive transfer is only split out of already-converted level
+    # channels (the compact path), so a log frame has none.
     out <- data.frame(
       main = (exp(main) - 1) * baseline,
+      shock = 0,
       repositioning = exp(main) * (exp(repositioning) - 1) * baseline,
       interaction = exp(main + repositioning) * (exp(interaction) - 1) * baseline,
       total = (exp(main + repositioning + interaction) - 1) * baseline
     )
   } else {
-    out <- data.frame(main = main, repositioning = repositioning,
+    # P2-3: `delta_main` is the static main effect; the shock-responsive
+    # transfer (`delta_sp_shock`, zero when absent) is its own channel.
+    shock <- suppressWarnings(as.numeric(decomp_df$delta_sp_shock %||% rep(0, nrow(decomp_df))))
+    out <- data.frame(main = main, shock = shock, repositioning = repositioning,
       interaction = interaction,
-      total = decomp_df$delta_total %||% (main + repositioning + interaction))
+      total = decomp_df$delta_total %||% (main + shock + repositioning + interaction))
   }
   out$weight <- .decomp_weights(decomp_df)
   if (!is.null(baseline_svy) && all(is.finite(ids))) {
@@ -87,13 +93,24 @@
 .decomposition_outcome_summary <- function(decomp_df, so, baseline_svy = NULL) {
   channels <- .decomposition_outcome_channels(decomp_df, so, baseline_svy)
   if (!nrow(channels)) return(data.frame())
+  fields <- c(main = "Main effect", shock = "Shock-responsive transfer",
+    repositioning = "Repositioning", interaction = "Interaction", total = "Total")
+  # A regular program has no shock channel: it is shown only when it is active
+  fields <- fields[names(fields) != "shock" | .decomposition_shock_active(channels$shock)]
   data.frame(
-    channel = c("Main effect", "Repositioning", "Interaction", "Total"),
-    value = vapply(c("main", "repositioning", "interaction", "total"), function(field) {
+    channel = unname(fields),
+    value = vapply(names(fields), function(field) {
       .weighted_mean_safe(channels[[field]], channels$weight)
     }, numeric(1)),
     stringsAsFactors = FALSE
   )
+}
+
+# Whether a shock-responsive channel carries any effect (otherwise the channel
+# is not shown or exported).
+.decomposition_shock_active <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  any(abs(x) > 1e-12, na.rm = TRUE)
 }
 
 .decomposition_outcome_deciles <- function(decomp_df, so, baseline_svy = NULL) {
@@ -103,6 +120,7 @@
     rows <- channels[channels$decile == d, , drop = FALSE]
     data.frame(decile = as.integer(d),
       main = .weighted_mean_safe(rows$main, rows$weight),
+      shock = .weighted_mean_safe(rows$shock, rows$weight),
       repositioning = .weighted_mean_safe(rows$repositioning, rows$weight),
       interaction = .weighted_mean_safe(rows$interaction, rows$weight),
       total = .weighted_mean_safe(rows$total, rows$weight))
@@ -148,12 +166,16 @@
 echart_outcome_decomposition_headline <- function(data, y_label = "Weighted average change (outcome units)", height = "360px") {
   if (is.null(data) || !nrow(data)) return(echart_blank("Decomposition is unavailable.", height))
   data$channel <- factor(data$channel,
-    levels = c("Main effect", "Repositioning", "Interaction", "Total"))
+    levels = c("Main effect", "Shock-responsive transfer", "Repositioning", "Interaction", "Total"))
+  channel_colours <- c(
+    "Main effect" = .wise_cat[[4]], "Shock-responsive transfer" = .wise_cat[[1]],
+    "Repositioning" = .wise_cat[[3]], "Interaction" = .wise_cat[[6]], "Total" = .wise_support
+  )
   fmt <- htmlwidgets::JS("function(v){ if (v == null || isNaN(v)) return '-'; return Number(v).toLocaleString('en-US',{maximumFractionDigits:2}); }")
   e <- data |>
     echarts4r::e_charts(channel, height = height) |>
     echarts4r::e_bar(value, name = "Weighted average change") |>
-    echarts4r::e_color(c(.wise_cat[[4]], .wise_cat[[3]], .wise_cat[[6]], .wise_support)) |>
+    echarts4r::e_color(unname(channel_colours[as.character(data$channel)])) |>
     echarts4r::e_x_axis(axisLabel = wise_eaxis_label(fontSize = 13),
       axisTick = list(alignWithLabel = TRUE), axisLine = list(lineStyle = list(color = .wise_grid))) |>
     echarts4r::e_y_axis(name = y_label, nameLocation = "end", nameRotate = 0,
@@ -175,7 +197,8 @@ echart_outcome_decomposition_headline <- function(data, y_label = "Weighted aver
 
 echart_outcome_decomposition_deciles <- function(data, y_label = "Weighted average change (outcome units)", height = "450px") {
   if (is.null(data) || !nrow(data)) return(echart_blank("Decile decomposition is unavailable for this run.", height))
-  channel_names <- c(main = "Main effect", repositioning = "Repositioning", interaction = "Interaction")
+  channel_names <- c(main = "Main effect", shock = "Shock-responsive transfer",
+    repositioning = "Repositioning", interaction = "Interaction")
   active <- names(channel_names)[vapply(names(channel_names), function(n) {
     values <- suppressWarnings(as.numeric(data[[n]]))
     any(abs(values) > 1e-12, na.rm = TRUE)
@@ -187,8 +210,8 @@ echart_outcome_decomposition_deciles <- function(data, y_label = "Weighted avera
   levels_decile <- as.character(sort(unique(data$decile)))
   long$decile <- factor(long$decile, levels = levels_decile)
   long$channel <- factor(long$channel, levels = unname(channel_names[active]))
-  colours <- c("Main effect" = .wise_cat[[4]], "Repositioning" = .wise_cat[[3]],
-    "Interaction" = .wise_cat[[6]])
+  colours <- c("Main effect" = .wise_cat[[4]], "Shock-responsive transfer" = .wise_cat[[1]],
+    "Repositioning" = .wise_cat[[3]], "Interaction" = .wise_cat[[6]])
   fmt <- htmlwidgets::JS("function(v){ if (v == null || isNaN(v)) return '-'; return Number(v).toLocaleString('en-US',{maximumFractionDigits:2}); }")
   e <- long |>
     echarts4r::group_by(channel) |>

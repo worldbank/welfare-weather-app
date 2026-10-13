@@ -1331,6 +1331,7 @@ step3_headline_cards <- function(paired_summary,
     fmt_change(metric_tail_focus$resilience[[1L]])
   } else "Unavailable"
   main_text <- repositioning_text <- interaction_text <- "Unavailable"
+  shock_text <- NULL
   if (!is.null(metric_focus)) {
     repositioning_modeled <- isTRUE(metric_decomposition$metadata$repositioning_modeled)
     interaction_included <- isTRUE(metric_decomposition$metadata$interaction_included)
@@ -1345,6 +1346,12 @@ step3_headline_cards <- function(paired_summary,
     interaction_included <- isTRUE(metric_decomposition$metadata$interaction_included)
     if (length(metric_tail_focus$main) && is.finite(metric_tail_focus$main[[1L]])) {
       main_text <- fmt_change(metric_tail_focus$main[[1L]])
+    }
+    # P2-3: the shock-responsive transfer is its own channel (zero otherwise)
+    if ("sp_shock" %in% names(metric_tail_focus) &&
+        is.finite(metric_tail_focus$sp_shock[[1L]]) &&
+        abs(metric_tail_focus$sp_shock[[1L]]) > 1e-12) {
+      shock_text <- fmt_change(metric_tail_focus$sp_shock[[1L]])
     }
     repositioning_text <- if (repositioning_modeled && length(metric_tail_focus$repositioning) &&
         is.finite(metric_tail_focus$repositioning[[1L]])) {
@@ -1399,6 +1406,7 @@ step3_headline_cards <- function(paired_summary,
       metric_context_note(spec),
       "Total adverse-year effect:", fmt_change(eff_20),
       "Main effect:", main_text,
+      if (!is.null(shock_text)) c("Shock-responsive transfer:", shock_text),
       "Repositioning:", repositioning_text,
       "Interaction:", interaction_text
     )

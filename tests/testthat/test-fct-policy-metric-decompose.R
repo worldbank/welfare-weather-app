@@ -137,7 +137,8 @@ test_that("one residual realization is reused across states and compact shared c
 test_that("baseline-anchored supports reuse ranks and average models equally", {
   annual <- data.frame(model_id = rep(c("a", "b", "c"), c(50, 40, 20)),
     sim_year = c(1:50, 1:40, 1:20), baseline = c(1:50, 1:40, 1:20))
-  annual$after_main <- annual$baseline + rep(c(1, 5, -2), c(50, 40, 20))
+  annual$after_static_main <- annual$baseline + rep(c(0.5, 4, -3), c(50, 40, 20))
+  annual$after_main <- annual$after_static_main + rep(c(0.5, 1, 1), c(50, 40, 20))
   annual$after_repositioning <- annual$after_main + rev(annual$baseline) / 10
   annual$policy <- annual$after_repositioning + sin(annual$sim_year) * 5
   annual <- .policy_metric_contributions(annual)
@@ -147,7 +148,7 @@ test_that("baseline-anchored supports reuse ranks and average models equally", {
   for (tail in c("low", "high")) {
     result <- .policy_metric_tails(annual, "future", tail)
     valid <- result[result$status == "ok", ]
-    expect_equal(valid$total, valid$main + valid$repositioning + valid$interaction)
+    expect_equal(valid$total, valid$main + valid$sp_shock + valid$repositioning + valid$interaction)
     expect_equal(valid$total, valid$policy - valid$baseline)
     expect_true(all(result$status[result$return_period == 50] == "unavailable"))
     expect_true(all(result$scope == "baseline_anchored"))
@@ -156,7 +157,7 @@ test_that("baseline-anchored supports reuse ranks and average models equally", {
     rows <- by_model[by_model$return_period == 20 & by_model$status == "ok", ]
     expect_equal(q$total, mean(rows$total))
     expect_equal(q$baseline, mean(rows$baseline))
-    expect_equal(q$total, q$main + q$repositioning + q$interaction)
+    expect_equal(q$total, q$main + q$sp_shock + q$repositioning + q$interaction)
     expect_true(all(attr(result, "adverse_support")$adverse_basis == "baseline_selected_metric"))
   }
 })

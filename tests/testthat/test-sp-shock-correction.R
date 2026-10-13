@@ -160,7 +160,12 @@ test_that("results, adapter and attribution agree for the same shock run", {
     result <- .policy_metric_decomposition(hist, policy_hist, list(), list(),
       out$annual_channels, "mean", requested_residuals = "none")
     expect_identical(result$status, "ok", info = result$reason)
-    expect_gt(sum(abs(result$annual$main)), 0)
+    # P2-3: the shock-responsive transfer is its own contribution, so the old
+    # combined Main is main + sp_shock and the total is unchanged
+    a <- result$annual
+    expect_gt(sum(abs(a$sp_shock)), 0)
+    expect_equal(a$total, a$main + a$sp_shock + a$repositioning + a$interaction)
+    expect_equal(a$total, a$policy - a$baseline)
   }
 })
 
@@ -221,6 +226,71 @@ test_that("annual cost and activation match a hand calculation", {
   expect_equal(s$mean_total_cost[s$scenario == "future"],
     mean(rows$total_cost[rows$scenario == "future"]))
   expect_true(is.na(s$cost_1_in_20[1])) # two years cannot support a 1-in-20 cost
+})
+
+test_that("the shock transfer is its own decomposition channel and totals do not change (P2-3)", {
+  for (trans in c("none", "log")) {
+    fx <- shk_fixture(trans)
+    out <- shk_run(fx, list(future = list(pipelines = list(m1 = fx$pipeline),
+      year_range = c("2030", "2031"))))
+    ch <- shk_channels(fx, out$annual_channels)
+    p <- fx$pipeline
+    tbl <- out$decomp_scenarios$channel_summary
+    mean_of <- function(rows, channel) rows[[paste0("sum_", channel)]] / rows[[paste0("weight_", channel)]]
+    hist <- tbl[tbl$scenario != "future", ]
+    # Per year, compared with the household-level channels of the same run
+    for (yr in hist$sim_year) {
+      idx <- p$sim_year == yr
+      w <- p$weight[idx]
+      wm <- function(x) sum(x[idx] * w) / sum(w)
+      row <- hist[hist$sim_year == yr, ]
+      shock <- wm(ch$delta_sp_shock)
+      expect_gt(abs(shock), 0)
+      # Static main + shock is the old combined Main; the total is unchanged
+      expect_equal(mean_of(row, "delta_sp_shock"), shock)
+      expect_equal(mean_of(row, "delta_main") + mean_of(row, "delta_sp_shock"), wm(ch$delta_main))
+      expect_equal(mean_of(row, "delta_sp") + mean_of(row, "delta_sp_shock"), wm(ch$delta_sp))
+      expect_equal(mean_of(row, "delta_total"), wm(ch$delta_total))
+      # Outcome-unit channels add up to the level total
+      expect_equal(
+        mean_of(row, "lvl_main") + mean_of(row, "lvl_sp_shock") + mean_of(row, "lvl_res1") +
+          mean_of(row, "lvl_res2"),
+        mean_of(row, "lvl_total")
+      )
+      expect_gt(abs(mean_of(row, "lvl_sp_shock")), 0)
+    }
+  }
+})
+
+test_that("a regular run shows no shock channel and keeps the old numbers (P2-3)", {
+  fx <- shk_fixture("none")
+  hist <- list(pipeline = fx$pipeline, so = shk_so("none"),
+    shared_context = list(train_aug = data.frame(id = 1:12, .resid = 0)), residuals = "none")
+  out <- apply_policy_delta_to_baseline(fx$base, fx$regular_policy, fx$model,
+    shk_so("none"), hist, decomp_context = fx$ctx_regular, run_identity = "annual-run")
+  tbl <- out$decomp_scenarios$channel_summary
+  expect_equal(tbl$sum_delta_sp_shock, rep(0, nrow(tbl)))
+  expect_equal(tbl$sum_lvl_sp_shock, rep(0, nrow(tbl)))
+  # Metric-aware states: the shock state equals the main state and adds nothing
+  policy_hist <- hist
+  policy_hist$pipeline <- out$hist_sim$pipeline
+  res <- .policy_metric_decomposition(hist, policy_hist, list(), list(),
+    out$annual_channels, "mean", requested_residuals = "none")
+  expect_identical(res$status, "ok", info = res$reason)
+  expect_equal(res$annual$after_static_main, res$annual$after_main)
+  expect_equal(res$annual$sp_shock, rep(0, nrow(res$annual)))
+  expect_equal(res$annual$total, res$annual$main + res$annual$repositioning + res$annual$interaction)
+  # The headline summary has no shock row
+  rows <- data.frame(delta_main = 1, delta_sp_shock = 0, delta_res1 = 0.1,
+    delta_res2 = 0.2, delta_total = 1.3, weight = 1)
+  expect_false("Shock-responsive transfer" %in%
+    .decomposition_outcome_summary(rows, list(transform = "none"))$channel)
+  rows$delta_main <- 0.6
+  rows$delta_sp_shock <- 0.4
+  s <- .decomposition_outcome_summary(rows, list(transform = "none"))
+  expect_identical(s$channel, c("Main effect", "Shock-responsive transfer", "Repositioning",
+    "Interaction", "Total"))
+  expect_equal(s$value, c(0.6, 0.4, 0.1, 0.2, 1.3))
 })
 
 test_that("reach counts per survey row match a brute-force calculation (P2-2)", {
