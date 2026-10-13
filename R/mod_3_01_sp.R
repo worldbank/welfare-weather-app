@@ -818,10 +818,93 @@ mod_3_01_sp_server <- function(id,
             )
           )
         ),
+        # Budget rule (shock-responsive programs only, P2-6)
+        conditionalPanel(
+          condition = paste0("input['", ns("sp_type"), "'] == 'shock'"),
+          tags$label(
+            class = "control-label",
+            tags$i(class = "fa fa-scale-balanced me-1"),
+            "Budget rule",
+            info_popover(
+              title = "Budget rule",
+              tags$p(
+                tags$b("Fixed amount:"),
+                "every paid", unit_word(plural = FALSE),
+                "gets the amount below in each activated year."
+              ),
+              tags$p(
+                tags$b("Share of modelled loss:"),
+                "a triggered location-month in a year gets a budget equal to",
+                "the chosen share of the modelled weather loss of its paid",
+                "households. The amount below is not used. Shared equally over the",
+                "paid households (or people, per Payment settings)."
+              ),
+              tags$p(
+                tags$b("What counts as loss:"),
+                "a household's loss in a year is how far its modelled welfare",
+                "falls below its own average over the historical years, in",
+                "welfare units, with no random residual. Years above the average",
+                "count as zero loss. The loss of households that are targeted",
+                "and in the payout scope is summed with survey weights, so",
+                "targeting errors and the payout scope carry through. Under the",
+                "national gate with all targeted households, each location is",
+                "still budgeted from its own loss."
+              ),
+              tags$p(
+                tags$b("Annual cap:"),
+                "an upper limit on total cost (including administration) in",
+                "any one year. When the payments of a year would exceed it,",
+                "all payments of that year are scaled down by the same",
+                "proportion. Leave blank for no cap."
+              )
+            )
+          ),
+          pill_toggle(
+            inputId = ns("budget_rule"),
+            label = NULL,
+            aria_label = "Budget rule",
+            choices = stats::setNames(
+              c("fixed", "loss_share"), c("Fixed amount", "Share of loss")
+            ),
+            selected = "fixed"
+          ),
+          conditionalPanel(
+            condition = paste0("input['", ns("budget_rule"), "'] == 'loss_share'"),
+            tags$div(
+              class = "sp-inline-control",
+              tags$label(
+                class = "sp-inline-label",
+                `for` = ns("loss_share_pct"),
+                tags$i(class = "fa fa-percent me-1"),
+                "Share of modelled loss paid (%)"
+              ),
+              numericInput(
+                inputId = ns("loss_share_pct"),
+                label = NULL,
+                value = 50, min = 1, max = 100, step = 5
+              )
+            )
+          ),
+          tags$div(
+            class = "sp-inline-control",
+            tags$label(
+              class = "sp-inline-label",
+              `for` = ns("annual_cap"),
+              tags$i(class = "fa fa-lock me-1"),
+              paste0("Annual cap on total cost (", currency, ", blank = none)")
+            ),
+            numericInput(
+              inputId = ns("annual_cap"),
+              label = NULL,
+              value = NA, min = 0, step = 100000
+            )
+          )
+        ),
         conditionalPanel(
           condition = paste0(
-            "input['", ns("budget_mode"), "'] == 'transfer_first' || input['",
-            ns("sp_type"), "'] == 'shock'"
+            "(input['", ns("budget_mode"), "'] == 'transfer_first' && input['",
+            ns("sp_type"), "'] != 'shock') || (input['", ns("sp_type"),
+            "'] == 'shock' && input['", ns("budget_rule"), "'] != 'loss_share')"
           ),
           tags$div(
             class = "sp-inline-control",
@@ -1096,6 +1179,10 @@ mod_3_01_sp_server <- function(id,
           as.numeric(input$national_k_pct %||% 0)
         ),
         payments_per_activation = input$payments_per_activation %||% 1L,
+        # Budget rule and annual cap (shock only; blank cap = none)
+        budget_rule = input$budget_rule %||% "fixed",
+        loss_share_pct = suppressWarnings(as.numeric(input$loss_share_pct %||% NA_real_)),
+        annual_cap = suppressWarnings(as.numeric(input$annual_cap %||% NA_real_)),
         loss_event_pct = suppressWarnings(as.numeric(input$loss_event_pct %||% 10)),
         # Timing - regular programs always have n payments
         transfer_frequency =
@@ -1276,6 +1363,20 @@ mod_3_01_sp_server <- function(id,
               }
             ),
             selection_card_row(
+              name = "Variability of annual cost (CV)",
+              pills = fmt_num(s$cost_cv, digits = 2, na = "Not available")
+            ),
+            selection_card_row(
+              name = "Modelled loss offset",
+              pills = fmt_num(100 * s$loss_offset_share, suffix = "%", na = "Not available")
+            ),
+            if (is.finite(suppressWarnings(as.numeric(preview_spec$annual_cap %||% NA)))) {
+              selection_card_row(
+                name = "Years the cap binds",
+                pills = fmt_num(100 * s$cap_exhaustion_share, suffix = "%", na = "Not available")
+              )
+            },
+            selection_card_row(
               name = "Population in triggered locations",
               pills = fmt_num(100 * s$mean_exposed_share, suffix = "%")
             ),
@@ -1380,7 +1481,8 @@ mod_3_01_sp_server <- function(id,
           } else {
             ""
           },
-          if (isTRUE(r$transfer_total <= 0)) {
+          if (isTRUE(r$transfer_total <= 0) &&
+            !identical(preview_spec$budget_rule, "loss_share")) {
             "No transfer is configured yet, so welfare would remain unchanged."
           } else {
             ""

@@ -118,9 +118,20 @@ Option 1 from plan section 3.2 if P2-0a passes: companion continuous column kept
 - Tests: companion excluded from model matrices; bit-identical outputs for existing runs; trigger thresholds on a binned variable equal those on its continuous source. Benchmark per the optimization guidelines.
 - Fallback: option 2 ("bin at or beyond k") if P2-0a is no-go.
 
-### P2-6: Budgets linked to need (M)
+### P2-6: Budgets linked to need (M) ☑
 
-Decision 7 scope: budget as a share of modelled loss (rule 7) with a ceiling, and the cap with pro-rata scale-down. Report coefficient of variation of annual cost, share of loss offset, share of affected poor not covered, and budget exhaustion (share of years the cap binds) beside each rule.
+**Status (13 October 2026):** built, unit-tested and benchmarked on BFA; not yet checked in a browser. Scope change agreed with the user: one annual cap on total cost (including administration), no separate per-cell ceiling.
+
+- Spec fields `budget_rule` (`fixed` | `loss_share`), `loss_share_pct` (0 to 100) and `annual_cap` (blank = none), validated in `.sp_shock_problem()`; they are in the SP list, so in the run signature and the export config. `has_sp_change()` needs a share instead of an amount under `loss_share`.
+- Loss share: a cell (survey round, location, interview month, year) gets a budget of `s` times the weighted modelled loss (rule 7; gains count as zero) of its statically eligible households in the payout scope, shared equally per household or per person (`.sp_shock_loss_share_transfer()`). Under the national gate with all targeted households each location is budgeted from its own loss. Documented in the Budget rule popover.
+- Annual cap (`.sp_shock_apply_cap()`): applies to both rules; a year whose transfer cost would exceed `cap * (1 - admin share)` has every payment scaled by the same factor, so total cost equals the cap in that year.
+- `sp_shock_pipeline_transfer()` is now the single place that builds the per-row transfer (run, attribution and sidebar preview all call it). New row columns `cap_binds`, `loss_value`, `paid_value`; new summary columns `cost_cv`, `loss_offset_share` (payments over all modelled loss) and `cap_exhaustion_share`; shown in the Diagnostics shock table and the sidebar card. The published `per_household` is, under `loss_share`, the mean payment in the historical years a household was paid.
+- Share of affected poor not covered: not repeated beside the rule; it is `1 - coverage` in the cost-effectiveness tab's "Shock-affected poor" section (Results poverty line).
+- Tests (`test-sp-shock-correction.R`): fixed rule and a distant cap bit-identical to Phase 1; hand-calculated loss share (own cell and shared cells, both amount bases); proportionality in the share; cap never exceeded, pro rata, binding years equal the cap; summary columns; row-order and repeat determinism; preview equals run; spec checks.
+- Benchmark (BFA, ols, one SSP and one period, 3 repetitions, `shock_sp`, fixed rule; before = 0e26b49): correction loop (`policy_seconds`, median) 7.51 s -> 7.66 s (+0.15 s, +2 %); output fingerprints identical (disabled and enabled uncertainty); peak parent RSS not higher (3.58 / 3.69 GB, run-to-run noise). The `targeted_sp` fixture is unchanged code path. IRN not run.
+- Not covered: a loss-share or capped run through the harness; LCU cost weights in the cap (the formula mirrors `.sp_transfer_totals_values()` but is only unit-tested in PPP).
+
+Original scope text (decision 7): budget as a share of modelled loss (rule 7) with a ceiling, and the cap with pro-rata scale-down. Report coefficient of variation of annual cost, share of loss offset, share of affected poor not covered, and budget exhaustion (share of years the cap binds) beside each rule.
 
 - Files: `R/fct_sp_shock.R`, `R/fct_policy_sim.R`, `R/mod_3_01_sp.R`, `R/mod_3_08_diagnostics.R`.
 - Done when: budget identity holds (total = net transfers + admin); an envelope is never exceeded; the ceiling binds as set; exhaustion share reported; new spec fields in the run signature and export.

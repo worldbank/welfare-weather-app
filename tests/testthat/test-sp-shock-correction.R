@@ -504,3 +504,200 @@ test_that("the loss-event share re-scores a finished run without a new run", {
   no_cells$cells <- NULL
   expect_identical(sp_shock_rescore(no_cells, 20), no_cells)
 })
+
+# P2-6: budgets linked to need ---------------------------------------------
+
+shk_plan <- function(fx, spec = fx$spec, ...) {
+  sp_shock_plan(spec, fx$pipeline$weather_exposure$table,
+    fx$shock_policy[[SP_ELIGIBLE_COL]], fx$shock_policy, "hh",
+    hist_pipeline = fx$pipeline, is_log = FALSE, ...)
+}
+
+# The "below" trigger fires the 2030 rows, whose predictions sit below the
+# household's own mean, so there is a modelled loss to share
+shk_loss_spec <- function(...) {
+  shk_spec(trigger_direction = "below", trigger_value = 20, budget_rule = "loss_share",
+    loss_share_pct = 50, transfer_amount_usd = 0, ...)
+}
+
+shk_with_cells <- function(p, row_index) {
+  p$weather_exposure$row_index <- row_index
+  p
+}
+
+test_that("the fixed rule is unchanged and a distant cap leaves it bit-identical", {
+  fx <- shk_fixture("none", shk_spec(trigger_value = 20))
+  p <- fx$pipeline
+  plan <- shk_plan(fx)
+  state <- sp_shock_pipeline_state(plan, p, p$weather_exposure)
+  phase1 <- plan$per_household[p$svy_row_id] * state$in_scope
+  tr <- sp_shock_pipeline_transfer(plan, p, p$weather_exposure)
+  expect_identical(as.numeric(tr), phase1)
+  expect_null(attr(tr, "cap_binds"))
+  far <- sp_shock_pipeline_transfer(shk_plan(fx, utils::modifyList(fx$spec, list(annual_cap = 1e12))),
+    p, p$weather_exposure)
+  expect_identical(as.numeric(far), phase1)
+  expect_false(any(attr(far, "cap_binds")))
+})
+
+test_that("loss share pays the share of each household's modelled loss (own cell)", {
+  fx <- shk_fixture("none", shk_loss_spec())
+  p <- fx$pipeline
+  plan <- shk_plan(fx)
+  tr <- sp_shock_pipeline_transfer(plan, p, p$weather_exposure)
+  state <- sp_shock_pipeline_state(plan, p, p$weather_exposure)
+  ref <- tapply(p$y_point, p$svy_row_id, mean)[as.character(p$svy_row_id)]
+  paid <- state$in_scope & fx$shock_policy[[SP_ELIGIBLE_COL]][p$svy_row_id]
+  expected <- ifelse(paid, 0.5 * pmax(ref - p$y_point, 0), 0)
+  expect_gt(sum(expected > 0), 0L)
+  expect_equal(as.numeric(tr), as.numeric(expected))
+  # No transfer for the households that are not paid, whatever their loss
+  expect_true(all(tr[!paid] == 0))
+})
+
+test_that("a cell budget is shared by the amount basis (hand calculation)", {
+  for (basis in c("per_household", "per_capita")) {
+    fx <- shk_fixture("none", shk_loss_spec(amount_basis = basis))
+    p <- shk_with_cells(fx$pipeline, c(1, 1, 2, 3, 3, 6, 6, 7, 8, 8))
+    plan <- shk_plan(fx)
+    tr <- as.numeric(sp_shock_pipeline_transfer(plan, p, p$weather_exposure))
+    state <- sp_shock_pipeline_state(plan, p, p$weather_exposure)
+    ids <- p$svy_row_id
+    loss <- pmax(tapply(p$y_point, ids, mean)[as.character(ids)] - p$y_point, 0)
+    scale <- if (basis == "per_household") fx$base$hhsize[ids] else rep(1, length(ids))
+    sel <- state$in_scope & fx$shock_policy[[SP_ELIGIBLE_COL]][ids]
+    expected <- numeric(length(ids))
+    for (cell in unique(p$weather_exposure$row_index)) {
+      i <- which(p$weather_exposure$row_index == cell & sel)
+      if (!length(i)) next
+      a <- 0.5 * sum(p$weight[i] * loss[i]) / sum(p$weight[i] / scale[i])
+      expected[i] <- a / scale[i]
+    }
+    expect_gt(sum(expected > 0), 0L)
+    expect_equal(tr, expected, info = basis)
+    # The cell budget is spent in full: cost identity on the cell level
+    for (cell in unique(p$weather_exposure$row_index)) {
+      i <- which(p$weather_exposure$row_index == cell & sel)
+      if (!length(i)) next
+      expect_equal(sum(p$weight[i] * tr[i] * scale[i] / scale[i]),
+        0.5 * sum(p$weight[i] * loss[i]), info = basis)
+    }
+  }
+})
+
+test_that("loss-share cost is proportional to the share, and zero without loss", {
+  fx <- shk_fixture("none", shk_loss_spec())
+  p <- fx$pipeline
+  cost <- function(pct) {
+    spec <- utils::modifyList(fx$spec, list(loss_share_pct = pct))
+    sum(sp_shock_pipeline_transfer(shk_plan(fx, spec), p, p$weather_exposure) * p$weight)
+  }
+  expect_equal(cost(50), 2 * cost(25))
+  expect_equal(cost(100), 4 * cost(25))
+  # A trigger that never fires pays nothing
+  never <- utils::modifyList(fx$spec, list(trigger_value = -1e9))
+  expect_true(all(sp_shock_pipeline_transfer(shk_plan(fx, never), p, p$weather_exposure) == 0))
+})
+
+test_that("the annual cap scales payments pro rata and is never exceeded", {
+  for (rule in c("fixed", "loss_share")) {
+    base_spec <- if (rule == "fixed") {
+      shk_spec(trigger_direction = "below", trigger_value = 20, admin_cost_pct = 10)
+    } else {
+      shk_loss_spec(admin_cost_pct = 10)
+    }
+    fx <- shk_fixture("none", base_spec)
+    p <- fx$pipeline
+    open <- shk_plan(fx)
+    tr0 <- sp_shock_pipeline_transfer(open, p, p$weather_exposure)
+    a0 <- sp_shock_annual(tr0, p, open$cost_frame, NULL, "hh", "PPP", open$admin_share)
+    expect_gt(max(a0$total_cost), 0)
+    cap <- 0.5 * max(a0$total_cost)
+    spec <- utils::modifyList(base_spec, list(annual_cap = cap))
+    plan <- shk_plan(fx, spec)
+    tr <- sp_shock_pipeline_transfer(plan, p, p$weather_exposure)
+    a <- sp_shock_annual(tr, p, plan$cost_frame, NULL, "hh", "PPP", plan$admin_share)
+    expect_true(all(a$total_cost <= cap * (1 + 1e-9)), info = rule)
+    binds <- a0$total_cost > cap
+    expect_true(any(binds))
+    expect_equal(a$total_cost[binds], rep(cap, sum(binds)), info = rule)
+    expect_equal(a$total_cost[!binds], a0$total_cost[!binds], info = rule)
+    expect_identical(unname(attr(tr, "cap_binds")), unname(binds), info = rule)
+    # Pro rata: one factor per capped year
+    for (yr in p$sim_year[1]) {
+      i <- p$sim_year == yr & tr0 > 0
+      expect_equal(length(unique(round(tr[i] / tr0[i], 12))), 1L, info = rule)
+    }
+    expect_true(all(tr <= tr0 + 1e-15))
+  }
+})
+
+test_that("run rows report cap exhaustion, cost variability and loss offset", {
+  spec <- shk_loss_spec(loss_event_pct = 10)
+  fx <- shk_fixture("none", spec)
+  open <- shk_run(fx)$shock
+  cap <- 0.5 * max(open$rows$total_cost)
+  fxc <- shk_fixture("none", utils::modifyList(spec, list(annual_cap = cap)))
+  out <- shk_run(fxc)$shock
+  s <- out$summary
+  expect_equal(s$cap_exhaustion_share, mean(out$rows$total_cost >= cap * (1 - 1e-9)))
+  expect_gt(s$cap_exhaustion_share, 0)
+  expect_equal(s$cost_cv, sd(out$rows$total_cost) / mean(out$rows$total_cost))
+  expect_equal(s$loss_offset_share, sum(out$rows$paid_value) / sum(out$rows$loss_value))
+  expect_lte(s$loss_offset_share, 0.5 + 1e-12)
+  expect_equal(open$summary$cap_exhaustion_share, 0)
+  expect_lt(sum(out$rows$total_cost), sum(open$rows$total_cost))
+  # Published amount of one activation: the mean payment of the paid years
+  expect_length(out$per_household, nrow(fxc$shock_policy))
+  expect_true(any(out$per_household > 0))
+  expect_equal(out$paid_historical, out$per_household > 0)
+})
+
+test_that("the budget draws no randomness: row order and repeated runs agree", {
+  fx <- shk_fixture("none", shk_loss_spec(annual_cap = 2))
+  p <- fx$pipeline
+  plan <- shk_plan(fx, fx$spec)
+  p <- shk_with_cells(p, c(1, 1, 2, 3, 3, 6, 6, 7, 8, 8))
+  tr <- as.numeric(sp_shock_pipeline_transfer(plan, p, p$weather_exposure))
+  ord <- c(10:1)
+  perm <- p
+  for (field in c("y_point", "svy_row_id", "sim_year", "weight", "id_vec")) perm[[field]] <- p[[field]][ord]
+  perm$weather_exposure$row_index <- p$weather_exposure$row_index[ord]
+  for (field in c("svy_row_id", "sim_year", "weight", "id_vec")) perm$weather_exposure[[field]] <- p[[field]][ord]
+  tr_perm <- as.numeric(sp_shock_pipeline_transfer(plan, perm, perm$weather_exposure))
+  expect_equal(tr_perm, tr[ord])
+  expect_identical(tr, as.numeric(sp_shock_pipeline_transfer(plan, p, p$weather_exposure)))
+})
+
+test_that("preview equals run for the budget rules", {
+  spec <- shk_loss_spec(loss_event_pct = 10)
+  fx <- shk_fixture("none", spec)
+  cap <- 0.5 * max(shk_run(fx)$shock$rows$total_cost)
+  fxc <- shk_fixture("none", utils::modifyList(spec, list(annual_cap = cap)))
+  hist <- list(pipeline = fxc$pipeline, so = shk_so("none"))
+  pre <- sp_shock_preview(fxc$spec, hist, fxc$base, "hh", seed = 5L,
+    exposure = fxc$pipeline$weather_exposure)
+  run <- shk_run(fxc)$shock
+  hist_rows <- run$rows[run$rows$scenario == "Historical", ]
+  expect_equal(pre$mean_cost, mean(hist_rows$total_cost))
+  expect_equal(pre$cap_exhaustion_share, run$summary$cap_exhaustion_share)
+  expect_equal(pre$cost_cv, run$summary$cost_cv)
+  expect_equal(pre$loss_offset_share, run$summary$loss_offset_share)
+})
+
+test_that("spec checks cover the budget rule, share and cap", {
+  ok <- shk_spec(trigger_value = 20)
+  expect_null(.sp_shock_problem(ok))
+  expect_match(.sp_shock_problem(utils::modifyList(ok, list(budget_rule = "x"))), "budget rule")
+  ls <- utils::modifyList(ok, list(budget_rule = "loss_share", loss_share_pct = 50))
+  expect_null(.sp_shock_problem(ls))
+  for (bad in list(NA_real_, 0, -5, 101)) {
+    expect_match(.sp_shock_problem(utils::modifyList(ls, list(loss_share_pct = bad))), "share")
+  }
+  expect_null(.sp_shock_problem(utils::modifyList(ok, list(annual_cap = NA_real_))))
+  expect_match(.sp_shock_problem(utils::modifyList(ok, list(annual_cap = 0))), "cap")
+  expect_match(.sp_shock_problem(utils::modifyList(ok, list(annual_cap = -1))), "cap")
+  # A loss-share program spends without an amount; the fixed rule needs one
+  expect_true(has_sp_change(utils::modifyList(ls, list(transfer_amount_usd = 0))))
+  expect_false(has_sp_change(utils::modifyList(ok, list(transfer_amount_usd = 0))))
+})

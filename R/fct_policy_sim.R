@@ -223,12 +223,15 @@ has_sp_change <- function(sp) {
     return(FALSE)
   }
   if (identical(sp$sp_type, "shock")) {
-    # Fixed amount per activation; the budget mode is not used (decision 12)
-    return(
+    # Fixed amount per activation (the budget mode is not used, decision 12), or
+    # a share of modelled loss (P2-6), which needs no amount
+    spends <- if (identical(sp$budget_rule %||% "fixed", "loss_share")) {
+      .lever_moved(sp$loss_share_pct)
+    } else {
       .lever_moved(sp$transfer_amount_usd) &&
-        .lever_moved(sp$payments_per_activation %||% 1L) &&
-        is.null(.sp_shock_problem(sp))
-    )
+        .lever_moved(sp$payments_per_activation %||% 1L)
+    }
+    return(spends && is.null(.sp_shock_problem(sp)))
   }
   if (identical(sp$budget_mode %||% "transfer_first", "budget_first")) {
     .lever_moved(sp$budget_fixed)
@@ -1708,7 +1711,10 @@ apply_policy_delta_to_baseline <- function(svy_baseline,
       sp, step2_exposure_resolve(hist_sim_baseline$pipeline, hist_sim_baseline)$table,
       svy_policy[[SP_ELIGIBLE_COL]], svy_policy, analysis_unit,
       hist_pipeline = hist_sim_baseline$pipeline,
-      is_log = identical(so$transform %||% "", "log")
+      is_log = identical(so$transform %||% "", "log"),
+      level_factor = outcome_level_scale(
+        rep(1, nrow(svy_policy)), so, .outcome_ppp(svy_policy)
+      )
     )
   }
   annual_channels <- annual_channels %||% .prepare_policy_annual_channels(
@@ -1794,7 +1800,13 @@ apply_policy_delta_to_baseline <- function(svy_baseline,
       paid_historical = hist_result$shock_paid,
       # Loss-event share the reach counts were taken at (not rescored)
       reach = shock_reach, reach_loss_event_pct = annual_channels$shock$loss_event_pct,
-      per_household = annual_channels$shock$per_household
+      # Amount of one activation; under a budget linked to modelled loss the
+      # mean payment of the years a household was paid in the historical arm
+      per_household = if (identical(annual_channels$shock$budget_rule, "loss_share")) {
+        hist_result$shock_paid_mean
+      } else {
+        annual_channels$shock$per_household
+      }
     )
   }
   out

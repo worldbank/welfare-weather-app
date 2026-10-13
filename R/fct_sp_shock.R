@@ -9,6 +9,7 @@
 SP_TRIGGER_TYPES <- c("weather", "return_period")
 SP_TRIGGER_DIRECTIONS <- c("above", "below", "either")
 SP_PAYOUT_SCOPES <- c("local", "national_triggered", "national_all")
+SP_BUDGET_RULES <- c("fixed", "loss_share")
 
 # A trigger is evaluated per survey round, survey location and interview month.
 .sp_trigger_key_cols <- c("code", "year", "survname", "loc_id", "int_month")
@@ -27,7 +28,8 @@ SP_PAYOUT_SCOPES <- c("local", "national_triggered", "national_all")
 #'
 #' Checks the trigger and payout fields of a scenario list from
 #' `mod_3_01_sp_server()`. Shock mode pays a fixed amount per activation, so the
-#' budget mode is not consulted (decision 12).
+#' budget mode is not consulted (decision 12). The budget rule (`"fixed"` or
+#' `"loss_share"`, P2-6) and the optional annual cap are checked here too.
 #'
 #' @param sp Scenario list.
 #' @return `NULL` when valid, otherwise one short message.
@@ -76,6 +78,21 @@ SP_PAYOUT_SCOPES <- c("local", "national_triggered", "national_all")
     if (identical(scope, "national_all") && k <= 0) {
       return("Paying all targeted households needs a national gate share above 0.")
     }
+  }
+  rule <- sp$budget_rule %||% "fixed"
+  if (!rule %in% SP_BUDGET_RULES) {
+    return("Choose a budget rule.")
+  }
+  if (identical(rule, "loss_share")) {
+    s <- num(sp$loss_share_pct)
+    if (!is.finite(s) || s <= 0 || s > 100) {
+      return("Enter a share of modelled loss between 0 and 100 percent.")
+    }
+  }
+  # A blank annual cap means no cap
+  cap <- num(sp$annual_cap)
+  if (!is.na(cap) && (!is.finite(cap) || cap <= 0)) {
+    return("The annual cap must be above 0, or left blank for no cap.")
   }
   NULL
 }
@@ -407,8 +424,12 @@ sp_dynamic_transfer <- function(state, eligibility, spec, svy, analysis_unit = "
 #'   `per_household`.
 #' @keywords internal
 sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit = "hh",
-                          hist_pipeline = NULL, is_log = FALSE) {
+                          hist_pipeline = NULL, is_log = FALSE, level_factor = NULL) {
   loss_pct <- suppressWarnings(as.numeric(spec$loss_event_pct %||% 10))[1L]
+  admin_share <- .sp_admin_share(spec)
+  cost_frame <- as.data.frame(svy)[intersect(c("weight", "hhsize", "ppp2021"), names(svy))]
+  cap <- suppressWarnings(as.numeric(spec$annual_cap %||% NA_real_))[1L]
+  rule <- spec$budget_rule %||% "fixed"
   list(
     spec = spec[intersect(names(spec), c(
       "trigger_type", "trigger_variable", "trigger_direction", "trigger_value",
@@ -418,16 +439,112 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     thresholds = sp_trigger_thresholds(hist_exposure, spec),
     per_household = .sp_dynamic_per_household(eligibility, spec, svy, analysis_unit),
     # Run outputs (P1-7): cost arithmetic and the modelled-loss reference
-    cost_frame = as.data.frame(svy)[intersect(c("weight", "hhsize", "ppp2021"), names(svy))],
+    cost_frame = cost_frame,
     analysis_unit = analysis_unit,
     currency = spec$currency %||% "PPP",
-    admin_share = .sp_admin_share(spec),
+    admin_share = admin_share,
+    # Budget (P2-6). Under "loss_share" a triggered cell's budget is
+    # `loss_share` times the modelled loss of its paid households, split by the
+    # amount basis (`amount_scale`); the fixed amount is then not used. The
+    # annual cap is on total cost, so the transfer part is `cap * (1 - admin)`.
+    budget_rule = rule,
+    loss_share = suppressWarnings(as.numeric(spec$loss_share_pct %||% NA_real_))[1L] / 100,
+    cap_transfer = if (is.finite(cap) && cap > 0) cap * (1 - admin_share) else NA_real_,
+    cost_weight = .sp_shock_cost_weights(cost_frame, analysis_unit, spec$currency %||% "PPP"),
+    eligible = !is.na(eligibility) & eligibility,
+    amount_scale = .sp_shock_amount_scale(svy, spec, analysis_unit),
+    level_factor = level_factor,
     loss_event_pct = if (is.finite(loss_pct) && loss_pct > 0) loss_pct else 10,
     is_log = isTRUE(is_log),
     reference = if (is.null(hist_pipeline)) NULL else {
       sp_shock_reference(hist_pipeline, nrow(svy), is_log)
     }
   )
+}
+
+# Annual transfer cost, in the entry currency, of one unit of stored daily
+# transfer in each survey row: the arithmetic of `.sp_transfer_totals_values()`
+# written as a per-row multiplier, so a year's transfer cost is a plain sum.
+.sp_shock_cost_weights <- function(cost_frame, analysis_unit, currency) {
+  n <- nrow(cost_frame)
+  has_w <- "weight" %in% names(cost_frame)
+  w <- if (has_w) suppressWarnings(as.numeric(cost_frame$weight)) else rep(1, n)
+  hh <- if (identical(analysis_unit, "hh") && "hhsize" %in% names(cost_frame)) {
+    h <- suppressWarnings(as.numeric(cost_frame$hhsize))
+    h[!is.finite(h) | h <= 0] <- 1
+    h
+  } else {
+    rep(1, n)
+  }
+  scale <- if (identical(analysis_unit, "hh") && !has_w) hh else rep(1, n)
+  ppp <- if (identical(.sp_currency(currency), "LCU") && "ppp2021" %in% names(cost_frame)) {
+    suppressWarnings(as.numeric(cost_frame$ppp2021))
+  } else {
+    rep(1, n)
+  }
+  m <- w * scale * ppp * 365
+  m[!is.finite(m)] <- 0
+  m
+}
+
+# Household-size divisor of the per-capita gain: a per-household amount is shared
+# by the members, a per-person amount is not (`.sp_transfer_values()`).
+.sp_shock_amount_scale <- function(svy, spec, analysis_unit) {
+  if (identical(analysis_unit, "hh") && "hhsize" %in% names(svy) &&
+    !identical(.sp_amount_basis(spec), "per_capita")) {
+    h <- suppressWarnings(as.numeric(svy$hhsize))
+    h[!is.finite(h) | h <= 0] <- 1
+    h
+  } else {
+    rep_len(1, nrow(svy))
+  }
+}
+
+# Transfer under the "loss_share" rule, one value per prediction row (stored
+# scale). The budget of a cell (survey round, location, interview month, year)
+# is `plan$loss_share` times the weighted modelled loss (rule 7: level scale,
+# no residual draws, gains count as zero) of the cell's households that are
+# statically eligible and in the payout scope. It is shared so that every paid
+# household in the cell gets the same amount on the plan's amount basis.
+.sp_shock_loss_share_transfer <- function(plan, pipeline, exposure, state) {
+  if (is.null(plan$reference)) {
+    stop("A budget linked to modelled loss needs the historical reference.", call. = FALSE)
+  }
+  ids <- as.integer(pipeline$svy_row_id)
+  g <- as.integer(exposure$row_index)
+  w <- if (is.null(pipeline$weight)) rep(1, length(ids)) else as.numeric(pipeline$weight)
+  w[!is.finite(w) | w < 0] <- 0
+  y <- as.numeric(pipeline$y_point)
+  level <- if (plan$is_log) exp(y) else y
+  loss <- pmax(plan$reference[ids] - level, 0) / (plan$level_factor[ids] %||% 1)
+  loss[!is.finite(loss)] <- 0
+  scale <- plan$amount_scale[ids]
+  sel <- state$in_scope & plan$eligible[ids] & w > 0
+  out <- numeric(length(ids))
+  if (!any(sel)) {
+    return(out)
+  }
+  num <- rowsum(w[sel] * loss[sel], g[sel])
+  den <- rowsum(w[sel] / scale[sel], g[sel])
+  amount <- plan$loss_share * num[, 1L] / den[, 1L]
+  out[sel] <- amount[match(g[sel], as.integer(rownames(num)))] / scale[sel]
+  out
+}
+
+# Annual cap with pro-rata scale-down: in a year whose transfer cost would exceed
+# the cap, every payment is multiplied by cap / cost. `cap_binds` (named by
+# simulation year) is kept as an attribute for `sp_shock_annual()`.
+.sp_shock_apply_cap <- function(transfer, plan, pipeline) {
+  if (!is.finite(plan$cap_transfer %||% NA_real_)) {
+    return(transfer)
+  }
+  ids <- as.integer(pipeline$svy_row_id)
+  cost <- ifelse(is.finite(transfer), transfer, 0) * plan$cost_weight[ids]
+  total <- rowsum(cost, pipeline$sim_year)
+  factor <- ifelse(total[, 1L] > plan$cap_transfer, plan$cap_transfer / total[, 1L], 1)
+  out <- transfer * factor[match(as.character(pipeline$sim_year), rownames(total))]
+  attr(out, "cap_binds") <- stats::setNames(factor < 1, rownames(total))
+  out
 }
 
 #' Each household's own historical mean outcome level
@@ -465,11 +582,19 @@ sp_shock_reference <- function(pipeline, n_svy, is_log) {
 #'   `weight`).
 #' @param exposure Resolved exposure mapping of that pipeline (`table`,
 #'   `row_index`).
-#' @return Numeric vector, one value per prediction row.
+#' @param state Optional result of `sp_shock_pipeline_state()`, when the caller
+#'   has it already.
+#' @return Numeric vector, one value per prediction row. With an annual cap it
+#'   carries the attribute `cap_binds` (logical by simulation year).
 #' @keywords internal
-sp_shock_pipeline_transfer <- function(plan, pipeline, exposure) {
-  state <- sp_shock_pipeline_state(plan, pipeline, exposure)
-  plan$per_household[as.integer(pipeline$svy_row_id)] * state$in_scope
+sp_shock_pipeline_transfer <- function(plan, pipeline, exposure, state = NULL) {
+  state <- state %||% sp_shock_pipeline_state(plan, pipeline, exposure)
+  raw <- if (identical(plan$budget_rule %||% "fixed", "loss_share")) {
+    .sp_shock_loss_share_transfer(plan, pipeline, exposure, state)
+  } else {
+    plan$per_household[as.integer(pipeline$svy_row_id)] * state$in_scope
+  }
+  .sp_shock_apply_cap(raw, plan, pipeline)
 }
 
 #' Trigger state of one pipeline (see `sp_trigger_state()`)
@@ -520,6 +645,9 @@ sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer,
   )
   cols <- c("pop_tp", "pop_fp", "pop_fn", "pop_tn", "spend_total", "spend_no_event")
   annual[cols] <- NA_real_
+  # Modelled loss and payments in the same units and weights, for the share of
+  # loss offset (P2-6)
+  annual[c("loss_value", "paid_value")] <- NA_real_
   if (is.null(plan$reference)) {
     return(annual)
   }
@@ -544,6 +672,14 @@ sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer,
   basis <- .sp_shock_basis(cells, plan$loss_event_pct, as.character(cells$sim_year))
   annual[cols] <- basis[match(as.character(annual$sim_year), rownames(basis)), cols]
   annual[cols] <- lapply(annual[cols], function(x) ifelse(is.na(x), 0, x))
+  loss_all <- pmax(ref - level, 0) / (plan$level_factor[as.integer(pipeline$svy_row_id)] %||% 1)
+  loss_all[!is.finite(loss_all)] <- 0
+  paid_all <- transfer
+  paid_all[!is.finite(paid_all)] <- 0
+  by_year <- rowsum(cbind(loss_value = w * loss_all, paid_value = w * paid_all), pipeline$sim_year)
+  hit <- match(as.character(annual$sim_year), rownames(by_year))
+  annual$loss_value <- by_year[hit, "loss_value"]
+  annual$paid_value <- by_year[hit, "paid_value"]
   attr(annual, "cells") <- cells
   attr(annual, "reach") <- .sp_shock_reach_rows(
     plan, pipeline, level, ref, rel, ok, transfer_model %||% transfer
@@ -697,7 +833,10 @@ sp_shock_rescore <- function(shock, loss_event_pct) {
 #'   `activation_freq`, `mean_total_cost`, `median_total_cost`, `cost_1_in_20`
 #'   (95th percentile, `NA` below 20 member-years), `mean_transfer_cost`,
 #'   `mean_admin_cost`, `false_positive_rate`, `false_negative_rate`,
-#'   `leakage_share`.
+#'   `leakage_share`, `cost_cv` (coefficient of variation of annual total cost),
+#'   `loss_offset_share` (payments over all modelled loss, same weights and
+#'   scale; gains count as no loss) and `cap_exhaustion_share` (share of
+#'   member-years in which the annual cap binds; 0 without a cap).
 #' @keywords internal
 sp_shock_summary <- function(rows) {
   ratio <- function(num, den) if (is.finite(den) && den > 0) num / den else NA_real_
@@ -717,7 +856,10 @@ sp_shock_summary <- function(rows) {
       mean_admin_cost = mean(d$admin_cost),
       false_positive_rate = ratio(sum(d$pop_fp), sum(d$pop_fp) + sum(d$pop_tn)),
       false_negative_rate = ratio(sum(d$pop_fn), sum(d$pop_fn) + sum(d$pop_tp)),
-      leakage_share = ratio(sum(d$spend_no_event), sum(d$spend_total))
+      leakage_share = ratio(sum(d$spend_no_event), sum(d$spend_total)),
+      cost_cv = if (n >= 2L) ratio(stats::sd(d$total_cost), mean(d$total_cost)) else NA_real_,
+      loss_offset_share = ratio(sum(d$paid_value %||% NA_real_), sum(d$loss_value %||% NA_real_)),
+      cap_exhaustion_share = if (is.null(d$cap_binds)) NA_real_ else mean(d$cap_binds)
     )
   })
   do.call(rbind, c(unname(out), list(make.row.names = FALSE)))
@@ -892,6 +1034,7 @@ sp_shock_annual <- function(transfer, pipeline, svy, state = NULL,
   ids <- as.integer(pipeline$svy_row_id)
   year <- pipeline$sim_year
   years <- sort(unique(year))
+  binds <- attr(transfer, "cap_binds")
   rows <- lapply(years, function(y) {
     idx <- which(year == y)
     v <- numeric(nrow(svy))
@@ -903,7 +1046,8 @@ sp_shock_annual <- function(transfer, pipeline, svy, state = NULL,
       sim_year = y, activated = any(transfer[idx] > 0, na.rm = TRUE),
       exposed_share = if (is.null(state)) NA_real_ else unname(state$share[as.character(y)]),
       transfer_cost = totals$total, admin_cost = totals$admin_cost,
-      total_cost = totals$total_cost
+      total_cost = totals$total_cost,
+      cap_binds = isTRUE(unname(binds[as.character(y)]))
     )
   })
   do.call(rbind, rows)
@@ -952,10 +1096,11 @@ sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
       plan <- sp_shock_plan(
         spec, exposure$table, eligible, svy, analysis_unit,
         hist_pipeline = pipeline,
-        is_log = identical(hist_sim$so$transform %||% "", "log")
+        is_log = identical(hist_sim$so$transform %||% "", "log"),
+        level_factor = outcome_level_scale(rep(1, nrow(svy)), hist_sim$so, .outcome_ppp(svy))
       )
       state <- sp_shock_pipeline_state(plan, pipeline, exposure)
-      transfer <- plan$per_household[as.integer(pipeline$svy_row_id)] * state$in_scope
+      transfer <- sp_shock_pipeline_transfer(plan, pipeline, exposure, state)
       # The same rows the run reports for the historical arm
       annual <- sp_shock_pipeline_rows(plan, pipeline, exposure, state, transfer)
       attr(annual, "cells") <- NULL
@@ -966,6 +1111,9 @@ sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
         false_positive_rate = basis$false_positive_rate,
         false_negative_rate = basis$false_negative_rate,
         leakage_share = basis$leakage_share,
+        cost_cv = basis$cost_cv,
+        loss_offset_share = basis$loss_offset_share,
+        cap_exhaustion_share = basis$cap_exhaustion_share,
         activation_freq = mean(annual$activated),
         mean_cost = mean(annual$total_cost),
         cost_1_in_20 = if (n_years >= 20L) {
@@ -1166,6 +1314,11 @@ sp_dynamic_effect <- function(y_t, transfer, is_log) {
     "False positives (paid, no loss event)" = function(s) pct(s$false_positive_rate),
     "False negatives (loss event, not paid)" = function(s) pct(s$false_negative_rate),
     "Spending in locations without a loss event" = function(s) pct(s$leakage_share),
+    "Variability of annual cost (CV)" = function(s) {
+      fmt_num(s$cost_cv %||% NA_real_, digits = 2, na = "Not available")
+    },
+    "Modelled loss offset by payments" = function(s) pct(s$loss_offset_share %||% NA_real_),
+    "Years the annual cap binds" = function(s) pct(s$cap_exhaustion_share %||% NA_real_),
     "Member-years" = function(s) fmt_count(s$n_member_years)
   )
   out <- data.frame(Measure = names(measures), stringsAsFactors = FALSE)

@@ -213,7 +213,7 @@
   if (is.null(plan)) return(list(state = NULL, stored = NULL, model = NULL))
   context <- prepared$context
   state <- sp_shock_pipeline_state(plan, pipeline, exposure)
-  stored <- plan$per_household[as.integer(pipeline$svy_row_id)] * state$in_scope
+  stored <- sp_shock_pipeline_transfer(plan, pipeline, exposure, state)
   list(state = state, stored = stored, model = outcome_level_scale(
     stored, context$so, .outcome_ppp(context$svy_baseline)[pipeline$svy_row_id]
   ))
@@ -458,6 +458,17 @@
     paid <- logical(length(prepared$shock$per_household))
     paid[as.integer(pipeline$svy_row_id)[shock$stored > 0]] <- TRUE
     result$shock_paid <- paid
+    # Mean payment in the years a row was paid: the "amount of one activation"
+    # for a budget that varies with the modelled loss (P2-6)
+    pos <- is.finite(shock$stored) & shock$stored > 0
+    paid_mean <- numeric(length(paid))
+    if (any(pos)) {
+      ids_pos <- as.integer(pipeline$svy_row_id)[pos]
+      sums <- rowsum(shock$stored[pos], ids_pos)
+      n_pos <- rowsum(rep(1, sum(pos)), ids_pos)
+      paid_mean[as.integer(rownames(sums))] <- sums[, 1L] / n_pos[, 1L]
+    }
+    result$shock_paid_mean <- paid_mean
   }
   result
 }
