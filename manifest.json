@@ -4582,7 +4582,7 @@
       "checksum": "5f0fbb622b518d71aef717c1210e98ae"
     },
     "R/fct_policy_sim_compare.R": {
-      "checksum": "7ef201c179a13870a3cd224fc3fc4f03"
+      "checksum": "0d39d3edb36aaa3633ef3f712a26ff0f"
     },
     "R/fct_policy_sim.R": {
       "checksum": "65b0d3baddd7a593c80cf55ac8cce6f2"
@@ -4618,10 +4618,10 @@
       "checksum": "f9593ab4512aad5f9fec2a00b741ead9"
     },
     "R/fct_sp_effectiveness.R": {
-      "checksum": "6f676ab0c9cabd5622d4d4fed4ab63d0"
+      "checksum": "22bd6c4de68e80cb899334f8c0157f76"
     },
     "R/fct_sp_shock.R": {
-      "checksum": "c39c108ce59b803964f6d9a552a7761e"
+      "checksum": "45e46eafaaf66434bca3f09e1d7da557"
     },
     "R/fct_step1_headline.R": {
       "checksum": "c34ddd4edc08f0142be921eff986fb86"
@@ -4717,16 +4717,19 @@
       "checksum": "464adb9e05f4b4315d1c56956705ab0a"
     },
     "R/mod_3_07_results.R": {
-      "checksum": "1498b5a7fc65e6db1f3925310d89b883"
+      "checksum": "3572f8115b26b726db9913ec5d7af3b5"
     },
     "R/mod_3_08_diagnostics.R": {
-      "checksum": "4fd26656d248098fc1b0d6e973650503"
+      "checksum": "daed9fd82c92bbfee44fec288a8d0cc0"
     },
     "R/mod_3_09_decomposition.R": {
       "checksum": "89465ecb0bfae87e0860ecbfd1f4eba7"
     },
+    "R/mod_3_10_cost_effectiveness.R": {
+      "checksum": "11749a880f8e45cf5b1073d1918049f5"
+    },
     "R/mod_3_scenario.R": {
-      "checksum": "0c6e045182f14e1f291619f8ed8c2cf5"
+      "checksum": "3adae4bcc67a1110024615e815e4f39b"
     },
     "R/RcppExports.R": {
       "checksum": "6729f575d994859c1ff72617f5ded89d"
