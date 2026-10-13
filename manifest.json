@@ -4621,7 +4621,7 @@
       "checksum": "6f676ab0c9cabd5622d4d4fed4ab63d0"
     },
     "R/fct_sp_shock.R": {
-      "checksum": "798b97e947cd7dae263703d5fa849410"
+      "checksum": "c39c108ce59b803964f6d9a552a7761e"
     },
     "R/fct_step1_headline.R": {
       "checksum": "c34ddd4edc08f0142be921eff986fb86"
@@ -4699,7 +4699,7 @@
       "checksum": "1635bad43e613277099a7e78d0d79488"
     },
     "R/mod_3_01_sp.R": {
-      "checksum": "805091e94dcaa86c9575f50903160a07"
+      "checksum": "c03ef2d5d35bdaf8342d1d355b73779a"
     },
     "R/mod_3_02_infra.R": {
       "checksum": "e04dbcb6082a3498ed2cfa7c4e17b5f2"
@@ -4753,7 +4753,7 @@
       "checksum": "d86839517cba2338b433402e7b916ac3"
     },
     "src/welfare_stats.cpp": {
-      "checksum": "a28446c42ffd74ed8e037e65c90f4789"
+      "checksum": "b8a6c217d6a98c2076b819490d716f53"
     }
   },
   "users": null
