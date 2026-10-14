@@ -351,9 +351,10 @@ mod_3_scenario_server <- function(id,
       annual_effects = s7$paired_annual_effects,
       metric_decomposition = s7$metric_decomposition,
       poverty_line = s7$poverty_line,
-      # Falls back to the Step 2 line when the Results metric is not a poverty one
+      # Falls back to the outcome's own line when the Results metric is not a poverty one
       reach_poverty_line = reactive(
-        s7$poverty_line() %||% s6$baseline_hist_sim()$pov_line
+        s7$poverty_line() %||%
+          { pl <- .sp_default_pov_line(selected_outcome()); if (is.na(pl)) NULL else pl }
       ),
       hist_label = s7$hist_label,
       analysis_unit = analysis_unit,

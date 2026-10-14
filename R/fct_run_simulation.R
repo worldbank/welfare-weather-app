@@ -1049,7 +1049,7 @@ fct_run_simulation <- function(sw,
       )
     }
   )
-  t_weather <-proc.time()[["elapsed"]] - t_weather_start
+  t_weather <- proc.time()[["elapsed"]] - t_weather_start
   progress_fn(0.35, "Climate data loaded. Running scenarios...")
   if (is.list(weather_result) && length(weather_result)) {
     for (key in setdiff(names(weather_result), emitted_keys)) {

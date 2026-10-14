@@ -279,7 +279,9 @@ mod_3_10_cost_effectiveness_server <- function(id,
             class = "diagnostic-note",
             "The trigger is fixed on the historical record, so under climate",
             "change it fires more or less often and the bill moves with it. Costs",
-            "include administration."
+            "include administration. The 1-in-20 cost here is the 95th percentile of",
+            "annual cost over all simulated years; the 1-in-20 year above is the",
+            "adverse weather year used in Results, so the two can differ."
           ),
           shiny::div(
             class = "wise-reactable-controls",
@@ -334,7 +336,9 @@ mod_3_10_cost_effectiveness_server <- function(id,
             ),
             "(the loss-event share of the run). Coverage is the share of those",
             "household-years in which the household was paid. Adequacy is the",
-            "payment as a share of the modelled loss.",
+            "payment as a share of the modelled loss. This table keeps the share the",
+            "run used: changing the loss-event share in Diagnostics re-scores basis",
+            "risk there live, but needs a new Step 3 run to change the figures here.",
             if (line_ok) {
               paste0(" Poverty line: ", prefix, fmt_num(r$line, 2), " per day (Results).")
             }

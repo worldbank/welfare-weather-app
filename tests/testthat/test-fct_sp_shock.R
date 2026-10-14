@@ -1064,3 +1064,29 @@ test_that("the trigger flyout shows the response check for the chosen variable",
     expect_match(as.character(output$trigger_response$html), "continuous weather variable")
   })
 })
+
+test_that("PR-8: design transfer pays every eligible household, whatever the budget rule", {
+  expect_equal(.sp_shock_design_transfer(c(5, 0, 7, 3), c(TRUE, TRUE, FALSE, NA)), c(5, 5, 0, 0))
+  # weighted mean of the positive amounts of eligible households
+  expect_equal(
+    .sp_shock_design_transfer(c(2, 4, 0), c(TRUE, TRUE, TRUE), c(1, 3, 1)),
+    c(2, 4, 3.5)
+  )
+  expect_equal(.sp_shock_design_transfer(c(0, 0), c(TRUE, TRUE)), c(0, 0))
+})
+
+test_that("PR-12: the grouped quantile equals stats::quantile type 7 per group", {
+  set.seed(3)
+  for (p in c(0, 0.05, 0.1, 0.5, 0.9, 0.95, 1 - 1 / 7, 1)) {
+    sizes <- c(1L, 2L, 5L, 30L, 31L, 0L, 7L)
+    g <- rep(seq_along(sizes), sizes)
+    x <- stats::rnorm(length(g))
+    got <- .sp_group_quantile(x, g, length(sizes), p)
+    for (k in seq_along(sizes)) {
+      want <- if (sizes[[k]] == 0L) NA_real_ else unname(stats::quantile(x[g == k], p, names = FALSE))
+      expect_identical(got[[k]], want)
+    }
+  }
+  expect_identical(.sp_group_quantile(c(2, 2, 2), c(1L, 1L, 1L), 1L, 0.3), 2)
+  expect_identical(.sp_group_quantile(numeric(), integer(), 2L, 0.3), c(NA_real_, NA_real_))
+})

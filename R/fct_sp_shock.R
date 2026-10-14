@@ -299,31 +299,34 @@ sp_trigger_thresholds <- function(hist_exposure, spec) {
   }
   grp <- do.call(paste, c(unname(as.list(hist_exposure[keys])), sep = "\r"))
   first <- !duplicated(grp)
-  vals <- split(as.numeric(hist_exposure[[var]]), factor(grp, levels = grp[first]))
-  n_years <- vapply(vals, function(v) sum(is.finite(v)), integer(1))
+  gi <- match(grp, grp[first])
+  n_cells <- sum(first)
+  vv <- as.numeric(hist_exposure[[var]])
+  fin <- is.finite(vv)
+  n_years <- tabulate(gi[fin], n_cells)
   tbl <- hist_exposure[first, keys, drop = FALSE]
   rownames(tbl) <- NULL
-  tbl$n_years <- unname(n_years)
+  tbl$n_years <- n_years
   tbl$supported <- tbl$n_years >= ceiling(n_tail)
   tbl$threshold <- NA_real_
   if (either) tbl$threshold_low <- NA_real_
   ok <- which(tbl$supported)
-  quant <- function(v, p) unname(stats::quantile(v[is.finite(v)], probs = p, names = FALSE))
+  quant <- function(p) .sp_group_quantile(vv[fin], gi[fin], n_cells, p)
   if (!identical(direction, "below")) {
-    tbl$threshold[ok] <- vapply(vals[ok], quant, numeric(1), p = 1 - 1 / n_tail)
+    tbl$threshold[ok] <- quant(1 - 1 / n_tail)[ok]
   }
   if (identical(direction, "below")) {
-    tbl$threshold[ok] <- vapply(vals[ok], quant, numeric(1), p = 1 / n_tail)
+    tbl$threshold[ok] <- quant(1 / n_tail)[ok]
   }
   if (either) {
-    tbl$threshold_low[ok] <- vapply(vals[ok], quant, numeric(1), p = 1 / n_tail)
+    tbl$threshold_low[ok] <- quant(1 / n_tail)[ok]
   }
   if (identical(var, SP_IMPACT_COL)) {
     # A discrete impact (a poverty rate of 0 in most years) can have a threshold
     # equal to its historical minimum, which would fire in every year: such a
     # cell has no adverse tail and never fires
-    lowest <- vapply(vals, function(v) suppressWarnings(min(v[is.finite(v)])), numeric(1))
-    flat <- tbl$supported & tbl$threshold <= unname(lowest)
+    lowest <- .sp_group_quantile(vv[fin], gi[fin], n_cells, 0)
+    flat <- tbl$supported & tbl$threshold <= lowest
     tbl$supported[flat] <- FALSE
     tbl$threshold[flat] <- NA_real_
     if (any(flat) && !any(tbl$supported)) {
@@ -406,6 +409,33 @@ sp_trigger_state <- function(exposure, thresholds, weights = NULL, spec) {
     joined$threshold
   }
   list(limit = limit, low = low)
+}
+
+# Type-7 sample quantile of finite values by group, in one sort: the arithmetic
+# of `stats::quantile()` (same interpolation, so the thresholds are identical)
+# without a call per cell. The threshold step runs it over about 10,000 cells on
+# BFA, where the per-cell calls were 60 % of the sidebar preview (PR-12).
+# `g` holds integer group ids in 1..`n_groups`; groups with no value return NA.
+.sp_group_quantile <- function(x, g, n_groups, p) {
+  out <- rep(NA_real_, n_groups)
+  if (!length(x)) {
+    return(out)
+  }
+  ord <- order(g, x, method = "radix")
+  xs <- x[ord]
+  n <- tabulate(g, n_groups)
+  start <- cumsum(n) - n
+  has <- which(n > 0L)
+  index <- 1 + (n[has] - 1) * p
+  lo <- floor(index)
+  hi <- ceiling(index)
+  qs <- xs[start[has] + lo]
+  top <- xs[start[has] + hi]
+  mix <- which(index > lo & top != qs)
+  h <- (index - lo)[mix]
+  qs[mix] <- (1 - h) * qs[mix] + h * top[mix]
+  out[has] <- qs
+  out
 }
 
 # Key columns as character, for joins between exposure and threshold tables.
@@ -536,8 +566,9 @@ sp_dynamic_transfer <- function(state, eligibility, spec, svy, analysis_unit = "
 #'   outcome is logged and the outcome level scale (modelled-loss reference).
 #' @param seed Base seed of the run (dynamic targeting draws).
 #' @param hist_exposure_map,pov_line Resolved exposure of the historical
-#'   pipeline (`table`, `row_index`) and the Step 2 poverty line; needed by an
-#'   impact trigger (`trigger_metric` other than `"weather"`).
+#'   pipeline (`table`, `row_index`) and a fallback poverty line used when the
+#'   spec has no `trigger_pov_line`; needed by an impact trigger
+#'   (`trigger_metric` other than `"weather"`).
 #' @return A list with `spec` (trigger and scope fields), `thresholds` and
 #'   `per_household`.
 #' @keywords internal
@@ -565,6 +596,10 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     impact$n_years <- length(unique(
       hist_pipeline$sim_year[is.finite(impact$hist_column[hist_exposure_map$row_index])]
     ))
+    # Where the historical metric sits, for the trigger settings (PR-9)
+    impact$hist_range <- unname(stats::quantile(
+      impact$hist_column[is.finite(impact$hist_column)], c(0, 0.5, 1), names = FALSE
+    ))
     impact$hist_column <- NULL
   }
   thresholds <- sp_trigger_thresholds(hist_exposure, spec)
@@ -579,7 +614,7 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     # Layered dynamic targeting (P2-8); NULL leaves the Phase 1 payout scope
     dyn = .sp_dyn_plan(spec, hist_exposure, thresholds, reference, cost_frame, seed),
     # Timing (P2-7); NULL for an ex-post design without delay
-    timing = .sp_timing_plan(spec, hist_exposure, seed),
+    timing = .sp_timing_plan(spec, hist_exposure, seed, impact),
     per_household = .sp_dynamic_per_household(eligibility, spec, svy, analysis_unit),
     # Run outputs (P1-7): cost arithmetic and the modelled-loss reference
     cost_frame = cost_frame,
@@ -635,7 +670,7 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
 
 # Plan part of an impact trigger (P2-5); NULL for a weather trigger. Everything
 # the metric needs besides the pipeline: the household reference (rule 7), the
-# Step 2 poverty line (rule 15: fixed per run, "not available" without one) and
+# trigger's own poverty line (rule 15: fixed per run, in the spec) and
 # the level. `hist_column` is the metric of the historical pipeline, one value
 # per exposure table row, for the thresholds.
 .sp_impact_plan <- function(spec, hist_pipeline, hist_exposure_map, reference, is_log, pov_line,
@@ -645,9 +680,14 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     return(NULL)
   }
   poverty <- metric %in% c("poverty_rate", "poor_count")
-  line <- suppressWarnings(as.numeric(pov_line))[1L]
+  # The trigger's own poverty line (outcome units per day) is fixed per run and
+  # part of the spec; `pov_line` is the fallback for callers without the field.
+  line <- suppressWarnings(as.numeric(spec[["trigger_pov_line"]]))[1L]
+  if (!(is.finite(line) && line > 0)) {
+    line <- suppressWarnings(as.numeric(pov_line))[1L]
+  }
   if (poverty && !(is.finite(line) && line > 0)) {
-    .sp_trigger_abort("A trigger on poverty is not available: Step 2 has no poverty line.")
+    .sp_trigger_abort("A trigger on poverty needs a poverty line. Enter one in the trigger settings.")
   }
   if (is.null(reference) || is.null(hist_exposure_map)) {
     .sp_trigger_abort("An impact trigger needs the historical predictions and exposure.")
@@ -749,7 +789,7 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
 # Ex post: `delay` is the effectiveness left after `timeliness_weeks` of delay at
 # `delay_loss_pct_per_week` lost each week, applied to welfare only. The
 # forecast draw is keyed by (cell, simulation year) and shared by all members.
-.sp_timing_plan <- function(spec, hist_exposure, seed) {
+.sp_timing_plan <- function(spec, hist_exposure, seed, impact = NULL) {
   num <- function(x, default) {
     v <- suppressWarnings(as.numeric(x %||% default))[1L]
     if (is.na(v)) default else v
@@ -763,6 +803,7 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
   if (!anticipatory && expost_delay == 1) {
     return(NULL)
   }
+  unit <- if (anticipatory) .sp_forecast_unit(spec, impact) else "cell"
   list(
     anticipatory = anticipatory, pod = num(spec[["forecast_pod_pct"]], 100) / 100,
     far = num(spec[["forecast_far_pct"]], 0) / 100,
@@ -770,8 +811,45 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     # Effectiveness of the payments made, and of the ex-post comparator
     delay = if (anticipatory) 1 else expost_delay, expost_delay = expost_delay,
     seed = seed,
-    cells = if (anticipatory) sort(unique(.sp_cell_key(hist_exposure)))
+    # Unit of the forecast draw (PR-3): the unit the trigger is read at
+    unit = unit,
+    cells = if (anticipatory) sort(unique(.sp_cell_key(hist_exposure))),
+    units = if (anticipatory) switch(unit,
+      cell = sort(unique(.sp_cell_key(hist_exposure))),
+      area = sort(unique(impact$geo)),
+      "all"
+    )
   )
+}
+
+# Unit of the forecast draw. A forecast is as good for every cell of the unit its
+# trigger is read at: one draw per year for a national impact metric or for the
+# national gate of a weather trigger, per area and year for an administrative
+# impact level, per survey cell and year otherwise.
+.sp_forecast_unit <- function(spec, impact) {
+  if (!is.null(impact)) {
+    switch(impact$level, national = "year", admin1 = , admin2 = "area", "cell")
+  } else if (identical(spec$payout_scope %||% "local", "local")) {
+    "cell"
+  } else {
+    "gate"
+  }
+}
+
+# Uniform draw per row, keyed by (unit, simulation year): one stream per year
+# `wise_seed(seed, "policy", stream, year)` drawing one value per unit of the
+# universe `units`; `key` names each row's unit. Rows with an unknown unit are NA.
+.sp_unit_uniform <- function(seed, stream, units, key, year) {
+  yr <- as.character(year)
+  u <- rep(NA_real_, length(key))
+  idx_unit <- match(key, units)
+  for (idx in split(seq_along(key), yr)) {
+    draw <- withr::with_seed(
+      wise_seed(seed, "policy", stream, yr[idx[1L]]), stats::runif(length(units))
+    )
+    u[idx] <- draw[idx_unit[idx]]
+  }
+  u
 }
 
 # One string per exposure row naming its (survey round, location, interview
@@ -786,19 +864,13 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
 # (cell, simulation year) from `wise_seed(seed, "policy", "sp-forecast", year)`;
 # rows no prediction row refers to stay FALSE. A cell that is not in the
 # historical table follows the realised trigger.
-.sp_forecast_fire <- function(timing, tbl, g, year, event) {
+.sp_forecast_fire <- function(timing, tbl, g, year, event, key = NULL) {
   rows <- unique(g)
   first <- match(rows, g)
-  cell <- match(.sp_cell_key(tbl[rows, , drop = FALSE]), timing$cells)
-  yr <- as.character(year[first])
-  u <- rep(NA_real_, length(rows))
-  for (idx in split(seq_along(rows), yr)) {
-    draw <- withr::with_seed(
-      wise_seed(timing$seed, "policy", "sp-forecast", yr[idx[1L]]),
-      stats::runif(length(timing$cells))
-    )
-    u[idx] <- draw[cell[idx]]
-  }
+  rkey <- if (is.null(key)) .sp_cell_key(tbl[rows, , drop = FALSE]) else key[rows]
+  u <- .sp_unit_uniform(
+    timing$seed, "sp-forecast", timing$units %||% timing$cells, rkey, year[first]
+  )
   fire <- ifelse(event[rows], u < timing$pod, u < timing$far)
   fire[is.na(u)] <- event[rows][is.na(u)]
   out <- rep(FALSE, nrow(tbl))
@@ -832,10 +904,11 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
   plan_ex$timing$delay <- plan$timing$expost_delay
   state_ex <- sp_shock_pipeline_state(plan_ex, pipeline, exposure)
   pay_ex <- sp_shock_pipeline_transfer(plan_ex, pipeline, exposure, state_ex)
-  pay_ex <- ifelse(is.finite(pay_ex), pay_ex, 0) * plan$timing$expost_delay
+  pay_ex <- ifelse(is.finite(pay_ex), pay_ex, 0)
   by_year <- rowsum(cbind(
     hit_value = w * pay * state$hit, false_value = w * pay * !state$hit,
-    expost_value = w * pay_ex
+    expost_value = w * pay_ex * plan$timing$expost_delay,
+    expost_paid = w * pay_ex
   ), pipeline$sim_year)
   by_year[match(as.character(years), rownames(by_year)), , drop = FALSE]
 }
@@ -936,7 +1009,21 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     cand <- which(exceeds_t & pop > 0)
     keep_t <- rep(FALSE, nrow(tbl))
     if (length(cand)) {
-      sev <- .sp_trigger_severity(tbl[cand, , drop = FALSE], plan$thresholds, dyn$scale)
+      sev <- if (isTRUE(plan$timing$anticipatory)) {
+        # Ex ante the realised depth is unknown: rank by a seeded draw keyed by
+        # (cell, year) so the order carries no realised information (PR-7)
+        .sp_unit_uniform(
+          dyn$seed, "sp-geo-rank", plan$timing$cells,
+          .sp_cell_key(tbl[cand, , drop = FALSE]), year_t[cand]
+        )
+      } else if (!is.null(plan$impact)) {
+        # An impact metric can be identical in every cell (national level), so
+        # rank by the cell's own modelled loss instead (PR-2)
+        .sp_cell_loss_depth(plan, pipeline, g, nrow(tbl))[cand]
+      } else {
+        .sp_trigger_severity(tbl[cand, , drop = FALSE], plan$thresholds, dyn$scale)
+      }
+      sev[!is.finite(sev)] <- 0
       key <- do.call(paste, c(
         unname(as.list(as.data.frame(tbl)[cand, intersect(.sp_trigger_key_cols, names(tbl)), drop = FALSE])),
         list(sep = "\r")
@@ -961,6 +1048,26 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     keep <- keep & !is.na(pick) & pick & is.finite(level)
   }
   in_scope & keep
+}
+
+# Modelled loss depth of each exposure table cell (rule 7): minus the
+# survey-weighted mean of level / reference - 1 over the cell's prediction rows,
+# so a larger value is a deeper loss. `NA` for cells without a finite value.
+.sp_cell_loss_depth <- function(plan, pipeline, g, n_cells) {
+  w <- if (is.null(pipeline$weight)) rep(1, length(g)) else as.numeric(pipeline$weight)
+  w[!is.finite(w) | w < 0] <- 0
+  y <- as.numeric(pipeline$y_point)
+  level <- if (plan$is_log) exp(y) else y
+  rel <- level / plan$reference[as.integer(pipeline$svy_row_id)] - 1
+  ok <- is.finite(rel) & w > 0
+  out <- rep(NA_real_, n_cells)
+  if (!any(ok)) {
+    return(out)
+  }
+  num <- rowsum(w[ok] * rel[ok], g[ok])
+  den <- rowsum(w[ok], g[ok])
+  out[as.integer(rownames(num))] <- -num[, 1L] / den[, 1L]
+  out
 }
 
 # One uniform per prediction row, keyed by (survey row, simulation year).
@@ -1126,15 +1233,47 @@ sp_shock_pipeline_state <- function(plan, pipeline, exposure) {
   }
   exceeds_t <- .sp_trigger_exceeds(tbl, plan$thresholds)
   g <- exposure$row_index
-  hit <- exceeds_t[g]
-  # An anticipatory design pays on a forecast of the trigger (P2-7)
-  if (isTRUE(plan$timing$anticipatory)) {
-    exceeds_t <- .sp_forecast_fire(plan$timing, tbl, g, pipeline$sim_year, exceeds_t)
+  real <- .sp_trigger_scope(
+    exceeds_t[g], pipeline$sim_year, pipeline$weight, plan$spec
+  )
+  # `hit`: the payee is in scope in the realised weather, which is what an
+  # anticipatory payment is made before (PR-4: under a national scope this is
+  # the realised gate, not the cell's own exceedance)
+  hit <- real$in_scope
+  forecast <- isTRUE(plan$timing$anticipatory)
+  if (forecast && identical(plan$timing$unit, "gate")) {
+    # The national gate is what is forecast: one draw per year (PR-3)
+    yrs <- names(real$gate)
+    u <- .sp_unit_uniform(plan$timing$seed, "sp-forecast", "all", rep("all", length(yrs)), yrs)
+    gate <- ifelse(real$gate, u < plan$timing$pod, u < plan$timing$far)
+    names(gate) <- yrs
+    gate_row <- unname(gate[as.character(pipeline$sim_year)])
+    exceeds <- exceeds_t[g]
+    in_scope <- if (identical(plan$spec$payout_scope, "national_all")) gate_row else gate_row & exceeds
+    state <- list(exceeds = in_scope, in_scope = in_scope, share = real$share, gate = gate)
+    exceeds_t <- in_scope[match(seq_len(nrow(tbl)), g)]
+    exceeds_t[is.na(exceeds_t)] <- FALSE
+  } else {
+    # An anticipatory design pays on a forecast of the trigger (P2-7)
+    if (forecast) {
+      key <- NULL
+      if (identical(plan$timing$unit, "year")) {
+        key <- rep("all", nrow(tbl))
+      } else if (identical(plan$timing$unit, "area")) {
+        key <- character(nrow(tbl))
+        key[g] <- plan$impact$geo[as.integer(pipeline$svy_row_id)]
+      }
+      exceeds_t <- .sp_forecast_fire(plan$timing, tbl, g, pipeline$sim_year, exceeds_t, key)
+    }
+    exceeds <- exceeds_t[g]
+    state <- c(list(exceeds = exceeds), if (forecast) {
+      .sp_trigger_scope(
+        exceeds, pipeline$sim_year, pipeline$weight, plan$spec
+      )[c("in_scope", "share", "gate")]
+    } else {
+      real[c("in_scope", "share", "gate")]
+    })
   }
-  exceeds <- exceeds_t[g]
-  state <- c(list(exceeds = exceeds), .sp_trigger_scope(
-    exceeds, pipeline$sim_year, pipeline$weight, plan$spec
-  )[c("in_scope", "share", "gate")])
   if (!is.null(plan$dyn)) {
     state$in_scope <- .sp_dyn_scope(plan, pipeline, exposure, tbl, exceeds_t, state$in_scope)
   }
@@ -1152,8 +1291,9 @@ sp_shock_pipeline_state <- function(plan, pipeline, exposure) {
 #' a (survey round, location, interview month, year) exposure row. A cell has a
 #' loss event when the mean modelled loss of its households, relative to each
 #' household's own historical mean level, is at or below `-loss_event_pct`
-#' percent (decision 6); the trigger "fires" in a cell when its weather exceeds
-#' the threshold. The `pop_*` columns hold the population weight of cells that
+#' percent (decision 6); the program "fires" in a cell when any of its
+#' prediction rows is in the final payout scope (trigger, national gate, layers
+#' and forecast). The `pop_*` columns hold the population weight of cells that
 #' are true or false positives and negatives; `spend_*` the spending reaching
 #' all cells and cells without a loss event. Basis-risk columns are `NA` when
 #' the plan has no historical reference.
@@ -1182,9 +1322,9 @@ sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer,
   # Anticipatory design (P2-7): value of payments before events that occur
   # (hits) and before none (false alarms), and the value the same trigger pays
   # ex post after the delay, in the same units and weights
-  annual[c("hit_value", "false_value", "expost_value")] <- NA_real_
+  annual[c("hit_value", "false_value", "expost_value", "expost_paid")] <- NA_real_
   if (isTRUE(plan$timing$anticipatory)) {
-    annual[c("hit_value", "false_value", "expost_value")] <-
+    annual[c("hit_value", "false_value", "expost_value", "expost_paid")] <-
       .sp_timing_values(plan, pipeline, exposure, state, transfer, annual$sim_year)
   }
   if (is.null(plan$reference)) {
@@ -1205,7 +1345,10 @@ sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer,
   cells <- data.frame(
     sim_year = pipeline$sim_year[first], pop = cell_w[, 1L],
     rel = rowsum((w * rel)[ok], g[ok])[, 1L] / cell_w[, 1L],
-    fired = state$exceeds[first],
+    # PR-6: a cell counts as paid when any of its prediction rows is in the final
+    # payout scope (gate, layers and forecast included), not when the raw
+    # trigger passed
+    fired = rowsum(as.numeric(state$in_scope[ok]), g[ok])[, 1L] > 0,
     spend = spend[match(cell, as.integer(rownames(spend))), 1L]
   )
   basis <- .sp_shock_basis(cells, plan$loss_event_pct, as.character(cells$sim_year))
@@ -1375,7 +1518,10 @@ sp_shock_rescore <- function(shock, loss_event_pct) {
 #'   `leakage_share`, `cost_cv` (coefficient of variation of annual total cost),
 #'   `loss_offset_share` (payments over all modelled loss, same weights and
 #'   scale; gains count as no loss) and `cap_exhaustion_share` (share of
-#'   member-years in which the annual cap binds; 0 without a cap).
+#'   member-years in which the annual cap binds; 0 without a cap), plus for an
+#'   anticipatory design `false_alarm_cost_share`, `breakeven_m` (m at which the
+#'   welfare effect of the payments matches the ex-post design) and
+#'   `breakeven_m_cost` (the same per unit of spending).
 #' @keywords internal
 sp_shock_summary <- function(rows) {
   ratio <- function(num, den) if (is.finite(den) && den > 0) num / den else NA_real_
@@ -1406,6 +1552,15 @@ sp_shock_summary <- function(rows) {
       false_alarm_cost_share = ratio(
         sum(d$false_value %||% NA_real_), sum(d$hit_value %||% NA_real_) + sum(d$false_value %||% NA_real_)
       ),
+      # The same on a value-per-cost basis: the multiplier at which the
+      # anticipatory design delivers as much welfare effect per unit of
+      # spending as the ex-post design (PR-5)
+      breakeven_m_cost = {
+        paid_all <- sum(d$hit_value %||% NA_real_) + sum(d$false_value %||% NA_real_)
+        ex_rate <- ratio(sum(d$expost_value %||% NA_real_), sum(d$expost_paid %||% NA_real_))
+        be <- ratio(ex_rate * paid_all - sum(d$false_value %||% NA_real_), sum(d$hit_value %||% NA_real_))
+        if (is.finite(be)) max(be, 0) else NA_real_
+      },
       breakeven_m = {
         be <- ratio(
           sum(d$expost_value %||% NA_real_) - sum(d$false_value %||% NA_real_),
@@ -1561,7 +1716,7 @@ sp_shock_climate_cost <- function(summary, reference = NULL) {
     `Mean annual cost` = money(d$mean_total_cost),
     `Cost change vs historical` = ifelse(d$is_reference, "Reference",
       signed(d$cost_change, 100, "%")),
-    `1-in-20 year cost` = money(d$cost_1_in_20),
+    `1-in-20 year cost (95th percentile)` = money(d$cost_1_in_20),
     check.names = FALSE, stringsAsFactors = FALSE
   )
   out
@@ -1625,7 +1780,9 @@ sp_shock_annual <- function(transfer, pipeline, svy, state = NULL,
 #'   `activation_freq`, `mean_cost`, `cost_1_in_20` (`NA` below 20 years),
 #'   `false_positive_rate`, `false_negative_rate`, `leakage_share` (scored with
 #'   `spec$loss_event_pct`, historical arm), `mean_exposed_share`, `n_years`, `n_record_years` (finite historical
-#'   years of the trigger variable). Otherwise `problem`, a message to show.
+#'   years of the trigger variable), `impact_range` (minimum, median and maximum
+#'   of an impact metric over the historical years; `NULL` for a weather
+#'   trigger). Otherwise `problem`, a message to show.
 #' @keywords internal
 sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
                              seed = WISEAPP_DEFAULT_SEED, exposure = NULL) {
@@ -1670,6 +1827,8 @@ sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
         cap_exhaustion_share = basis$cap_exhaustion_share,
         false_alarm_cost_share = basis$false_alarm_cost_share,
         breakeven_m = basis$breakeven_m,
+        breakeven_m_cost = basis$breakeven_m_cost,
+        impact_range = plan$impact$hist_range,
         activation_freq = mean(annual$activated),
         mean_cost = mean(annual$total_cost),
         cost_1_in_20 = if (n_years >= 20L) {
@@ -1876,15 +2035,19 @@ sp_dynamic_effect <- function(y_t, transfer, is_log) {
     "Modelled loss offset by payments" = function(s) pct(s$loss_offset_share %||% NA_real_),
     "Years the annual cap binds" = function(s) pct(s$cap_exhaustion_share %||% NA_real_),
     "Payments before no event (false alarms)" = function(s) pct(s$false_alarm_cost_share %||% NA_real_),
-    "Breakeven effectiveness multiplier m" = function(s) {
+    "m needed to match the ex-post welfare effect" = function(s) {
       fmt_num(s$breakeven_m %||% NA_real_, digits = 2, na = "Not available")
+    },
+    "m needed to match the ex-post effect per dollar" = function(s) {
+      fmt_num(s$breakeven_m_cost %||% NA_real_, digits = 2, na = "Not available")
     },
     "Member-years" = function(s) fmt_count(s$n_member_years)
   )
   # The anticipatory rows only appear for an anticipatory run
   if (!any(is.finite(c(summary$breakeven_m, summary$false_alarm_cost_share)))) {
     measures <- measures[setdiff(names(measures), c(
-      "Payments before no event (false alarms)", "Breakeven effectiveness multiplier m"
+      "Payments before no event (false alarms)", "m needed to match the ex-post welfare effect",
+      "m needed to match the ex-post effect per dollar"
     ))]
   }
   out <- data.frame(Measure = names(measures), stringsAsFactors = FALSE)
@@ -1949,4 +2112,28 @@ echart_shock_cost_distribution <- function(summary, y_label = "Annual cost", hei
   e$x$opts$grid <- list(containLabel = TRUE, left = 8, right = 14, top = 30, bottom = 46)
   e$x$opts$color <- unname(.wise_cat)
   wise_echart_theme(e)
+}
+
+# Default poverty line for an impact trigger: the outcome's own line
+# (`so$povline`), else NA. Outcome units per day.
+.sp_default_pov_line <- function(so) {
+  pl <- suppressWarnings(as.numeric(so[["povline"]]))[1L]
+  if (length(pl) && is.finite(pl) && pl > 0) pl else NA_real_
+}
+
+# Per-household transfer of a "year in which every eligible household is paid",
+# for the design figures of Diagnostics (PR-8). Recipients are the statically
+# eligible households, whatever the budget rule. `amount` is the run's amount of
+# one activation; eligible households with no amount (a share-of-loss budget
+# that never paid them) take the weighted mean positive amount, so coverage means
+# "can be paid" under every rule.
+.sp_shock_design_transfer <- function(amount, eligible, weight = NULL) {
+  amount <- suppressWarnings(as.numeric(amount))
+  amount[!is.finite(amount) | amount < 0] <- 0
+  elig <- if (is.null(eligible)) amount > 0 else !is.na(eligible) & as.logical(eligible)
+  w <- if (is.null(weight)) rep(1, length(amount)) else suppressWarnings(as.numeric(weight))
+  w[!is.finite(w) | w < 0] <- 0
+  pos <- elig & amount > 0 & w > 0
+  fill <- if (any(pos)) sum(w[pos] * amount[pos]) / sum(w[pos]) else 0
+  ifelse(elig, ifelse(amount > 0, amount, fill), 0)
 }

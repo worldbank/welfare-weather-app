@@ -336,12 +336,13 @@ test_that("basis risk and leakage follow the loss events", {
     # own mean over the historical rows
     ref <- tapply(p$y_point, p$svy_row_id, mean)[as.character(p$svy_row_id)]
     event <- (p$y_point / ref - 1) <= -0.10
-    fired <- tbl$temp >= 20
     pop <- p$weight
-    transfer <- sp_shock_pipeline_transfer(
-      sp_shock_plan(spec, tbl, fx$shock_policy[[SP_ELIGIBLE_COL]], fx$shock_policy, "hh"),
-      p, p$weather_exposure
-    )
+    plan <- sp_shock_plan(spec, tbl, fx$shock_policy[[SP_ELIGIBLE_COL]], fx$shock_policy, "hh")
+    # PR-6: a cell counts as paid when it is in the final payout scope (here the
+    # national gate applies), not when its raw trigger passed
+    fired <- sp_shock_pipeline_state(plan, p, p$weather_exposure)$in_scope
+    if (scope == "local") expect_identical(fired, tbl$temp >= 20)
+    transfer <- sp_shock_pipeline_transfer(plan, p, p$weather_exposure)
     for (yr in c(2030L, 2031L)) {
       i <- p$sim_year == yr
       row <- rows[rows$sim_year == yr, ]
@@ -1236,8 +1237,21 @@ test_that("the breakeven multiplier equates effective value with the ex-post des
   expect_equal(sum(r$expost_value), 0.8 * sum(r0$expost_value))
   expect_gt(sum(r0$expost_value), 0)
   # Display rows appear only for an anticipatory run
-  expect_true("Breakeven effectiveness multiplier m" %in% .sp_shock_display(out$summary)$Measure)
-  expect_false("Breakeven effectiveness multiplier m" %in% .sp_shock_display(ex$summary)$Measure)
+  expect_true("m needed to match the ex-post welfare effect" %in% .sp_shock_display(out$summary)$Measure)
+  expect_false("m needed to match the ex-post welfare effect" %in% .sp_shock_display(ex$summary)$Measure)
+  # PR-5: per dollar of spending. m_cost solves
+  # (m * hit + false) / (hit + false) = expost_value / expost_paid
+  rate <- sum(r$expost_value) / sum(r$expost_paid)
+  be_cost <- (rate * (sum(r$hit_value) + sum(r$false_value)) - sum(r$false_value)) / sum(r$hit_value)
+  expect_equal(out$summary$breakeven_m_cost, max(be_cost, 0))
+  expect_true("m needed to match the ex-post effect per dollar" %in% .sp_shock_display(out$summary)$Measure)
+})
+
+test_that("with a perfect forecast and no delay both breakeven multipliers are 1", {
+  spec <- shk_timing_spec(transfer_timing = "anticipatory", forecast_pod_pct = 100,
+    forecast_far_pct = 0)
+  s <- shk_timing_run(shk_fixture("none", spec), spec)$shock$summary
+  expect_equal(c(s$breakeven_m, s$breakeven_m_cost), c(1, 1))
 })
 
 test_that("preview equals run for an anticipatory design", {
@@ -1373,4 +1387,136 @@ test_that("targeting-error and forecast draws are common random numbers across p
   expect_identical(u_part, u_all[keep])
   # ... and the draws do move with the seed
   expect_false(identical(.sp_dyn_uniform(6L, p$sim_year, p$svy_row_id, 12L), u_all))
+})
+
+# Review fixes PR-1 to PR-7 ---------------------------------------------------
+
+test_that("PR-1: the trigger's own poverty line is used, fixed in the spec", {
+  fx <- shk_fixture("none", shk_impact_spec("poverty_rate", trigger_pov_line = 1.5))
+  plan <- shk_impact_plan(fx, fx$spec, pov_line = NULL)
+  expect_equal(plan$impact$pov_line, 1.5)
+  # The spec wins over a fallback line, and the fallback serves old specs
+  expect_equal(shk_impact_plan(fx, fx$spec, pov_line = 9)$impact$pov_line, 1.5)
+  fx2 <- shk_fixture("none", shk_impact_spec("poverty_rate"))
+  expect_equal(shk_impact_plan(fx2, fx2$spec, pov_line = 2)$impact$pov_line, 2)
+  expect_error(shk_impact_plan(fx2, fx2$spec, pov_line = NULL), "poverty line",
+    class = "sp_trigger_problem")
+  # Only the poverty metrics need it
+  expect_equal(shk_impact_plan(fx2, shk_impact_spec("loss"), pov_line = NULL)$impact$metric, "loss")
+  expect_equal(.sp_default_pov_line(data.frame(povline = 3.65)), 3.65)
+  expect_true(is.na(.sp_default_pov_line(data.frame(povline = NA_real_))))
+  expect_true(is.na(.sp_default_pov_line(NULL)))
+})
+
+test_that("PR-2: the worst-affected share of a national impact trigger ranks by own loss", {
+  spec <- shk_impact_spec("loss", trigger_type = "weather", trigger_value = -1e9,
+    dyn_geo = "worst_share", dyn_geo_pct = 50)
+  fx <- shk_fixture("none", spec)
+  p <- fx$pipeline
+  plan <- shk_impact_plan(fx, spec)
+  st <- sp_shock_pipeline_state(plan, p, p$weather_exposure)
+  expect_true(any(st$in_scope) && !all(st$in_scope))
+  depth <- .sp_cell_loss_depth(plan, p, p$weather_exposure$row_index, nrow(p$weather_exposure$table))
+  for (yr in unique(p$sim_year)) {
+    i <- p$sim_year == yr
+    paid <- depth[p$weather_exposure$row_index][i & st$in_scope]
+    unpaid <- depth[p$weather_exposure$row_index][i & !st$in_scope]
+    if (length(unpaid)) expect_gte(min(paid), max(unpaid))
+  }
+  # The depth is minus the weighted mean of level / reference - 1 per cell
+  ref <- tapply(p$y_point, p$svy_row_id, mean)[as.character(p$svy_row_id)]
+  i1 <- 1L
+  expect_equal(unname(depth[p$weather_exposure$row_index[i1]]), -(p$y_point[i1] / ref[i1] - 1), ignore_attr = TRUE)
+})
+
+test_that("PR-3: forecast draws follow the unit the trigger is read at", {
+  # National impact trigger: one draw per year, so a year is paid in full or not at all
+  spec <- shk_impact_spec("loss", trigger_type = "weather", trigger_value = -1e9,
+    transfer_timing = "anticipatory", forecast_pod_pct = 50, forecast_far_pct = 50)
+  fx <- shk_fixture("none", spec)
+  p <- fx$pipeline
+  for (seed in 1:6) {
+    plan <- sp_shock_plan(spec, p$weather_exposure$table, fx$shock_policy[[SP_ELIGIBLE_COL]],
+      fx$shock_policy, "hh", hist_pipeline = p, is_log = FALSE, seed = seed,
+      hist_exposure_map = p$weather_exposure, pov_line = 1.5)
+    expect_identical(plan$timing$unit, "year")
+    ex <- sp_shock_pipeline_state(plan, p, p$weather_exposure)$exceeds
+    for (yr in unique(p$sim_year)) expect_length(unique(ex[p$sim_year == yr]), 1L)
+  }
+  expect_gt(length(unique(unlist(lapply(1:12, function(seed) {
+    plan <- sp_shock_plan(spec, p$weather_exposure$table, fx$shock_policy[[SP_ELIGIBLE_COL]],
+      fx$shock_policy, "hh", hist_pipeline = p, is_log = FALSE, seed = seed,
+      hist_exposure_map = p$weather_exposure, pov_line = 1.5)
+    sp_shock_pipeline_state(plan, p, p$weather_exposure)$exceeds[p$sim_year == 2030L][1L]
+  })))), 1L)
+
+  # Weather trigger with a national scope: the gate is forecast, one draw per year
+  gate_spec <- shk_timing_spec(transfer_timing = "anticipatory", forecast_pod_pct = 50,
+    forecast_far_pct = 50, payout_scope = "national_all", national_k_pct = 20)
+  fg <- shk_fixture("none", gate_spec)
+  for (seed in 1:8) {
+    plan <- shk_plan(fg, gate_spec, seed = seed)
+    expect_identical(plan$timing$unit, "gate")
+    sc <- sp_shock_pipeline_state(plan, fg$pipeline, fg$pipeline$weather_exposure)$in_scope
+    for (yr in unique(fg$pipeline$sim_year)) expect_length(unique(sc[fg$pipeline$sim_year == yr]), 1L)
+  }
+  full <- utils::modifyList(gate_spec, list(forecast_pod_pct = 100, forecast_far_pct = 100))
+  expect_true(all(shk_timing_state(fg, full)$state$in_scope))
+  none <- utils::modifyList(gate_spec, list(forecast_pod_pct = 0, forecast_far_pct = 0))
+  expect_false(any(shk_timing_state(fg, none)$state$in_scope))
+  # A perfect forecast of the gate is the ex-post gate
+  perfect <- utils::modifyList(gate_spec, list(forecast_pod_pct = 100, forecast_far_pct = 0))
+  expost <- utils::modifyList(gate_spec, list(transfer_timing = "expost"))
+  expect_identical(
+    shk_timing_state(fg, perfect)$state$in_scope,
+    shk_timing_state(shk_fixture("none", expost), expost)$state$in_scope
+  )
+  # Local scope keeps one draw per survey cell
+  expect_identical(shk_timing_state(shk_fixture("none", shk_timing_spec(
+    transfer_timing = "anticipatory")))$plan$timing$unit, "cell")
+})
+
+test_that("PR-4: under a national scope a hit is the realised scope, not the cell's exceedance", {
+  spec <- shk_timing_spec(transfer_timing = "anticipatory", forecast_pod_pct = 100,
+    forecast_far_pct = 0, payout_scope = "national_all", national_k_pct = 10)
+  fx <- shk_fixture("none", spec)
+  ant <- shk_timing_state(fx)$state
+  ex_spec <- utils::modifyList(spec, list(transfer_timing = "expost"))
+  ex <- shk_timing_state(shk_fixture("none", ex_spec), ex_spec)$state
+  expect_identical(ant$hit, ex$in_scope)
+  expect_true(any(ant$hit & !(fx$pipeline$weather_exposure$table$temp >= 20)))
+})
+
+test_that("PR-7: with a forecast the worst-affected ranking carries no realised depth", {
+  spec <- shk_timing_spec(transfer_timing = "anticipatory", forecast_pod_pct = 100,
+    forecast_far_pct = 0, trigger_value = -1e9, dyn_geo = "worst_share", dyn_geo_pct = 50)
+  fx <- shk_fixture("none", spec)
+  a <- shk_timing_state(fx)
+  q <- fx$pipeline
+  q$weather_exposure$table$temp <- rev(q$weather_exposure$table$temp)
+  b <- sp_shock_pipeline_state(a$plan, q, q$weather_exposure)
+  expect_identical(a$state$in_scope, b$in_scope)
+  expect_true(any(a$state$in_scope) && !all(a$state$in_scope))
+  # A different seed reorders the cells
+  moved <- unlist(lapply(2:9, function(seed) {
+    pl <- shk_plan(fx, spec, seed = seed)
+    identical(sp_shock_pipeline_state(pl, fx$pipeline, fx$pipeline$weather_exposure)$in_scope,
+      a$state$in_scope)
+  }))
+  expect_false(all(moved))
+})
+
+test_that("PR-9: an impact plan records where the metric sits historically", {
+  fx <- shk_fixture("none", shk_impact_spec("loss"))
+  plan <- shk_impact_plan(fx, fx$spec)
+  expect_length(plan$impact$hist_range, 3L)
+  expect_true(all(diff(plan$impact$hist_range) >= 0))
+  expect_null(plan$impact$hist_column)
+  pre <- sp_shock_preview(fx$spec, list(pipeline = fx$pipeline, svy = fx$base, so = shk_so("none")),
+    fx$base, "hh", seed = 5L, exposure = fx$pipeline$weather_exposure)
+  expect_equal(pre$impact_range, plan$impact$hist_range)
+  weather <- sp_shock_preview(shk_spec(trigger_value = 20),
+    list(pipeline = fx$pipeline, svy = fx$base, so = shk_so("none")),
+    fx$base, "hh", seed = 5L, exposure = fx$pipeline$weather_exposure)
+  expect_null(weather$impact_range)
 })

@@ -37,7 +37,14 @@
     transfer_timing = "anticipatory", forecast_pod_pct = 70, forecast_far_pct = 20,
     effect_multiplier = 1.5
   ))
+  # The same shock program with a budget linked to modelled loss and an annual
+  # cap (P2-6); the cap is in the entry currency and binds in some years on BFA
+  sp_shock_budget <- utils::modifyList(sp_shock, list(
+    budget_rule = "loss_share", loss_share_pct = 50, annual_cap = 5e7,
+    admin_cost_pct = 10
+  ))
   fixtures <- list(
+    shock_sp_budget = list(sp = sp_shock_budget),
     shock_sp_antic = list(sp = sp_shock_antic),
     shock_sp_impact = list(sp = sp_shock_impact),
     covariate = list(infra = infra),
@@ -433,6 +440,10 @@
         svy_policy[[SP_ELIGIBLE_COL]], svy_policy, config$unit,
         hist_pipeline = hist_sim$pipeline,
         is_log = identical(so$transform %||% "", "log"),
+        level_factor = outcome_level_scale(
+          rep(1, nrow(svy_policy)), so, .outcome_ppp(svy_policy)
+        ),
+        seed = config$seed,
         hist_exposure_map = hist_exposure, pov_line = hist_sim$pov_line
       )
     }
@@ -508,7 +519,8 @@
       run_identity = run_identity,
       annual_channels = annual_prepared,
       sp = if (is_shock) policy_fixture$sp,
-      analysis_unit = config$unit
+      analysis_unit = config$unit,
+      seed = config$seed
     )
     if (nzchar(profile)) utils::Rprof(NULL)
     analytic_delta_seconds <- proc.time()[["elapsed"]] - t0

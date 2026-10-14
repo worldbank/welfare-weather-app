@@ -339,7 +339,10 @@
           ),
           shiny::p(
             "For a shock-responsive program, cost, leakage and adequacy describe a",
-            "year in which every eligible household is paid; the cost over",
+            "year in which every statically eligible household is paid; coverage is",
+            "who the targeting rule can reach. Trigger scope, geography and forecast",
+            "layers are not applied here. Under a share-of-loss budget the amount is",
+            "the mean payment in the years a household was paid. The cost over",
             "simulated years is in the table below and the Cost-effectiveness tab."
           )
         )
@@ -519,7 +522,9 @@ mod_3_08_diagnostics_server <- function(id,
         if (length(amount) != nrow(pol)) {
           return(NULL)
         }
-        pol[[SP_TRANSFER_COL]] <- amount
+        pol[[SP_TRANSFER_COL]] <- .sp_shock_design_transfer(
+          amount, pol[[SP_ELIGIBLE_COL]], pol[["weight"]]
+        )
       }
       ideal <- tryCatch(
         if (!is.null(sp)) .determine_sp_eligibility(base, sp, apply_errors = FALSE),

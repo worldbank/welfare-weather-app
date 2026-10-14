@@ -199,6 +199,20 @@ mod_3_01_sp_server <- function(id,
       )
     })
 
+    # Prefill the trigger's poverty line from the outcome's own line
+    # An edited or imported value is kept: the prefill only replaces the value
+    # it set itself (or the static initial one)
+    last_pov_default <- 3
+    observeEvent(tryCatch(selected_outcome(), error = function(e) NULL), {
+      so <- tryCatch(selected_outcome(), error = function(e) NULL)
+      pl <- .sp_default_pov_line(so)
+      current <- suppressWarnings(as.numeric(shiny::isolate(input$trigger_pov_line)))[1L]
+      if (!is.na(pl) && (is.na(current) || isTRUE(all.equal(current, last_pov_default)))) {
+        updateNumericInput(session, "trigger_pov_line", value = pl)
+        last_pov_default <<- pl
+      }
+    }, ignoreNULL = TRUE)
+
     output$sp_trigger_ui <- renderUI({
       cands <- trigger_candidates()
       conditionalPanel(
@@ -247,7 +261,7 @@ mod_3_01_sp_server <- function(id,
                       "comes from the historical years and is applied unchanged to climate",
                       "members. A real program would need an impact estimate this timely,",
                       "so read it as a benchmark. Loss is the percent of the households'",
-                      "own typical welfare. Poverty needs the Step 2 poverty line, and per",
+                      "own typical welfare. Poverty uses the poverty line set below, and per",
                       "location at least", SP_IMPACT_MIN_HH, "sampled households per",
                       "location. For a return period the poverty rate and the number of",
                       "poor give the same years."
@@ -284,52 +298,76 @@ mod_3_01_sp_server <- function(id,
                   ),
                   selected = "national"
                 ),
+                conditionalPanel(
+                  condition = paste0(
+                    "input['", ns("trigger_metric"), "'] == 'poverty_rate' || input['",
+                    ns("trigger_metric"), "'] == 'poor_count'"
+                  ),
+                  numericInput(
+                    ns("trigger_pov_line"),
+                    label = tags$span(
+                      "Poverty line for the trigger (per day)",
+                      info_popover(
+                        title = "Trigger poverty line",
+                        tags$p(
+                          "In the outcome's currency per day. Fixed for the run, so it",
+                          "does not follow the poverty line chosen later in Results.",
+                          "Prefilled from the outcome's poverty line."
+                        )
+                      )
+                    ),
+                    value = 3, min = 0, step = 0.05
+                  )
+                ),
                 tags$p(
                   class = "text-muted small",
                   "Pays when the metric is at or above the threshold (more loss or",
                   "more poor is adverse)."
-                )
+                ),
+                textOutput(ns("impact_info"), container = function(...) {
+                  tags$p(class = "text-muted small", ...)
+                })
               ),
               pill_toggle(
                 inputId = ns("trigger_type"),
                 label = "Trigger on",
                 aria_label = "Trigger type",
-                choices = c("Weather level" = "weather", "Return period" = "return_period"),
+                choices = c("Fixed level" = "weather", "Return period" = "return_period"),
                 selected = "weather"
               ),
               conditionalPanel(
                 condition = paste0("input['", ns("trigger_metric"), "'] == 'weather'"),
-              selectInput(
-                ns("trigger_variable"),
-                label = tags$span(
-                  tags$i(class = "fa fa-cloud-sun-rain me-1"),
-                  "Weather variable",
-                  info_popover(
-                    title = "Weather variable",
-                    tags$p(
-                      "Only continuous weather variables can trigger payments.",
-                      "The value is read in the unit the model uses for the",
-                      "variable: physical units, deviation from the reference",
-                      "mean, or a standardized anomaly."
+                selectInput(
+                  ns("trigger_variable"),
+                  label = tags$span(
+                    tags$i(class = "fa fa-cloud-sun-rain me-1"),
+                    "Weather variable",
+                    info_popover(
+                      title = "Weather variable",
+                      tags$p(
+                        "Only continuous weather variables can trigger payments.",
+                        "The value is read in the unit the model uses for the",
+                        "variable: physical units, deviation from the reference",
+                        "mean, or a standardized anomaly."
+                      )
                     )
-                  )
+                  ),
+                  choices = cands, selected = cands[[1]]
                 ),
-                choices = cands, selected = cands[[1]]
-              ),
-              textOutput(ns("trigger_unit"), container = function(...) {
-                tags$p(class = "text-muted small", ...)
-              }),
-              uiOutput(ns("trigger_response")),
-              pill_toggle(
-                inputId = ns("trigger_direction"),
-                label = "Pay when the value is",
-                aria_label = "Trigger direction",
-                choices = c(
-                  "At or above" = "above", "At or below" = "below",
-                  "Either end" = "either"
-                ),
-                selected = "above"
-              )
+                textOutput(ns("trigger_unit"), container = function(...) {
+                  tags$p(class = "text-muted small", ...)
+                }),
+                uiOutput(ns("trigger_response")),
+                pill_toggle(
+                  inputId = ns("trigger_direction"),
+                  label = "Pay when the value is",
+                  aria_label = "Trigger direction",
+                  choices = c(
+                    "At or above" = "above", "At or below" = "below",
+                    "Either end" = "either"
+                  ),
+                  selected = "above"
+                )
               ),
               conditionalPanel(
                 condition = paste0("input['", ns("trigger_type"), "'] != 'return_period'"),
@@ -371,6 +409,11 @@ mod_3_01_sp_server <- function(id,
                         "variable is typically more extreme, so cost concentrates",
                         "there. Use a return period for the same activation chance",
                         "everywhere."
+                      ),
+                      tags$p(
+                        "For an impact metric the value is in the metric's unit (shown",
+                        "below the settings), together with its range over the",
+                        "historical years."
                       )
                     )
                   ),
@@ -471,24 +514,26 @@ mod_3_01_sp_server <- function(id,
                   min = 5, max = 100, value = 50, step = 5, post = "%"
                 )
               ),
-              checkboxInput(
-                ns("dyn_welfare"),
-                label = tags$span(
-                  "Also select on predicted welfare at the trigger",
-                  info_popover(
-                    title = "Predicted welfare (oracle)",
-                    tags$p(
-                      "A household is selected when the model's prediction of its own",
-                      "welfare in that year is at or below the chosen share of the",
-                      "households' historical mean welfare distribution (fixed for the",
-                      "run). This knows each household's modelled welfare in the shock",
-                      "year, which a real registry would not: read the result as an",
-                      "upper bound and use larger error rates. Errors are drawn per",
-                      "household and year with the run seed, the same in every scenario."
-                    )
-                  )
+              # The popover sits beside the checkbox, not inside its label (PR-11)
+              tags$div(
+                class = "d-flex align-items-start gap-1",
+                checkboxInput(
+                  ns("dyn_welfare"),
+                  label = "Also select on predicted welfare at the trigger",
+                  value = FALSE
                 ),
-                value = FALSE
+                info_popover(
+                  title = "Predicted welfare (oracle)",
+                  tags$p(
+                    "A household is selected when the model's prediction of its own",
+                    "welfare in that year is at or below the chosen share of the",
+                    "households' historical mean welfare distribution (fixed for the",
+                    "run). This knows each household's modelled welfare in the shock",
+                    "year, which a real registry would not: read the result as an",
+                    "upper bound and use larger error rates. Errors are drawn per",
+                    "household and year with the run seed, the same in every scenario."
+                  )
+                )
               ),
               conditionalPanel(
                 condition = paste0("input['", ns("dyn_welfare"), "']"),
@@ -526,7 +571,9 @@ mod_3_01_sp_server <- function(id,
                       tags$p(
                         "In a location-year where the weather really passes the trigger,",
                         "the forecast fires with this probability. A missed event pays",
-                        "nobody. The draw is seeded by location and year."
+                        "nobody. The draw is seeded by the unit the trigger is read at",
+                        "(survey location and month, area, or the whole country for a",
+                        "national gate or national impact) and the year."
                       ),
                       tags$p(
                         "100 % detection, 0 % false alarms and a multiplier of 1 give",
@@ -563,8 +610,8 @@ mod_3_01_sp_server <- function(id,
                         "occurs (not its cost). It is an assumption: the model predicts",
                         "annual welfare and cannot show the mechanism (avoided asset",
                         "sales, scarring), so leave it at 1 unless you have evidence.",
-                        "Diagnostics shows the breakeven m at which the forecast design",
-                        "matches the ex-post design."
+                        "Diagnostics shows the m at which the forecast design matches the",
+                        "welfare effect of the ex-post design, in total and per dollar."
                       )
                     )
                   ),
@@ -696,6 +743,30 @@ mod_3_01_sp_server <- function(id,
         tryCatch(selected_weather(), error = function(e) NULL)
       )
       if (nzchar(unit)) paste0("Thresholds are in: ", unit, ".") else ""
+    })
+
+    # Unit and historical range of an impact metric (PR-9)
+    output$impact_info <- renderText({
+      metric <- input$trigger_metric %||% "weather"
+      if (identical(metric, "weather")) {
+        return("")
+      }
+      unit <- switch(metric,
+        loss = "percent of the households' own typical welfare (positive = loss)",
+        poverty_rate = "percent of people below the poverty line",
+        poor_count = "people below the poverty line"
+      )
+      st <- sp_shock_state()
+      r <- if (is.list(st) && is.null(st$problem)) st$impact_range
+      paste0(
+        "Thresholds are in: ", unit, ".",
+        if (length(r) == 3L && all(is.finite(r))) {
+          paste0(
+            " Historical years: lowest ", fmt_num(r[[1L]], digits = 1), ", median ",
+            fmt_num(r[[2L]], digits = 1), ", highest ", fmt_num(r[[3L]], digits = 1), "."
+          )
+        }
+      )
     })
 
     # Response check (P2-1): modelled loss by decile of the chosen variable, so
@@ -1434,6 +1505,7 @@ mod_3_01_sp_server <- function(id,
         ),
         trigger_metric = input$trigger_metric %||% "weather",
         trigger_level = input$trigger_level %||% "national",
+        trigger_pov_line = suppressWarnings(as.numeric(input$trigger_pov_line %||% NA_real_)),
         payout_scope = input$payout_scope %||% "local",
         national_k_pct = suppressWarnings(
           as.numeric(input$national_k_pct %||% 0)
@@ -1656,8 +1728,14 @@ mod_3_01_sp_server <- function(id,
             },
             if (is.finite(s$breakeven_m %||% NA_real_)) {
               selection_card_row(
-                name = "Breakeven effectiveness multiplier m",
+                name = "m needed to match ex post",
                 pills = fmt_num(s$breakeven_m, digits = 2, na = "Not available")
+              )
+            },
+            if (is.finite(s$breakeven_m_cost %||% NA_real_)) {
+              selection_card_row(
+                name = "m needed to match ex post, per dollar",
+                pills = fmt_num(s$breakeven_m_cost, digits = 2, na = "Not available")
               )
             },
             selection_card_row(
