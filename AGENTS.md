@@ -49,7 +49,7 @@ testthat::test_dir("tests")
 devtools::test()
 ```
 
-Development scripts are in `dev/`: `run_dev.R` (run the app), `00_make_manifest.R` (Connect manifest) and the `bench_*.R` benchmark harnesses.
+Development scripts are in `dev/`: `run_dev.R` (run the app), `00_make_manifest.R` (Connect manifest), the `bench_*.R` benchmark harnesses and `ui_drive.R` (start the app and drive it in headless Chrome one command per call: tabs, inputs, screenshots, errors; usage in `.claude/skills/wise-ui-check/SKILL.md`).
 
 ## Architecture
 
