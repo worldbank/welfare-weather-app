@@ -167,7 +167,7 @@ mod_3_10_cost_effectiveness_server <- function(id,
             },
             paste0("Administration: ", fmt_num(100 * x$admin, 1), "% of cost")
           ),
-          collapse = " · "
+          collapse = " \u00b7 "
         )
       )
     })

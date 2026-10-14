@@ -27,7 +27,10 @@ jobs:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
       WISEAPP_AXE_FAIL: "1"
-      WISEAPP_E2E_OUT: ${{ runner.temp }}/e2e-out
+      # The runner context is not available in job-level env (the workflow
+      # would be rejected before any job starts), so the output dir is a
+      # path under the workspace instead of runner.temp.
+      WISEAPP_E2E_OUT: e2e-out
     steps:
       - uses: actions/checkout@v4
 
@@ -50,5 +53,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: axe-results
-          path: ${{ runner.temp }}/e2e-out
+          path: e2e-out
           if-no-files-found: ignore
