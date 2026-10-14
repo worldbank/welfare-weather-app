@@ -424,7 +424,9 @@ format_prediction_count <- function(count, analysis_unit = NULL) {
     hh = "household-years", ind = "individual-years", firm = "firm-years",
     if (!is.null(analysis_unit) && nzchar(as.character(analysis_unit)[1L])) {
       paste0(as.character(analysis_unit)[1L], "-years")
-    } else "observation-years"
+    } else {
+      "observation-years"
+    }
   )
   paste(value, unit)
 }

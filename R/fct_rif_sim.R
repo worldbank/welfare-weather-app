@@ -299,7 +299,8 @@ build_direct_rif_metadata <- function(fits) {
     scen_fe <- add_fixed_effects("scenario", nrow(design_cache$scenario_X))[rows]
     list(
       base = as.numeric(design_cache$base_X[rows, design_cache$beta_columns[[k]], drop = FALSE] %*% beta) + base_fe,
-      scenario = as.numeric(design_cache$scenario_X[rows, design_cache$beta_columns[[k]], drop = FALSE] %*% beta) + scen_fe
+      scenario = as.numeric(design_cache$scenario_X[rows, design_cache$beta_columns[[k]], drop = FALSE] %*%
+        beta) + scen_fe
     )
   }
 

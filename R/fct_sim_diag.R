@@ -596,7 +596,9 @@ echart_weather_density_panel <- function(survey_weather,
   }
   continuous_filt <- if (is.data.frame(continuous_raw)) {
     .filter_hist_weather(continuous_raw, survey_weather)
-  } else NULL
+  } else {
+    NULL
+  }
   if (!is.null(continuous_filt)) {
     continuous_filt <- continuous_filt[
       !duplicated(continuous_filt[, c("loc_id", "int_month", "cal_year")]), ,
@@ -824,7 +826,9 @@ echart_weather_density_panel <- function(survey_weather,
     (!log_transform | ridge_input$x > 0)]
   x_range <- if (length(all_values)) {
     as.numeric(stats::quantile(all_values, c(0.01, 0.99), names = FALSE, type = 8))
-  } else NULL
+  } else {
+    NULL
+  }
   rd <- build_ridge_distribution_data(
     ridge_input,
     x_var = "x", group_var = "group", fill_var = "group",
@@ -915,7 +919,9 @@ echart_weather_density_panel <- function(survey_weather,
       loc_id = hist_filt$loc_id,
       int_month = hist_filt$int_month
     ))
-  } else NULL
+  } else {
+    NULL
+  }
   if (!is.null(continuous_filt)) {
     continuous_filt <- continuous_filt[
       !duplicated(continuous_filt[, c("loc_id", "int_month", "cal_year")]), ,
@@ -989,7 +995,9 @@ echart_weather_density_panel <- function(survey_weather,
     all_labels <- unname(vapply(var_levels(wv), .weather_display_bin_label, character(1L)))
   }
   e$x$opts$xAxis <- list(type = "category", data = as.list(all_labels),
-    name = if (multi) "Weather variable and bin" else {
+    name = if (multi) {
+      "Weather variable and bin"
+    } else {
       spec <- .diag_weather_spec_row(weather_specs, weather_vars[[1L]])
       units <- if (!is.null(spec) && "units" %in% names(spec)) as.character(spec$units[[1L]]) else NULL
       .weather_display_axis_label(labels(weather_vars[[1L]]), units, binned = TRUE)

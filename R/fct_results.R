@@ -1013,12 +1013,18 @@ calc_fit_stats <- function(model, is_logistic, engine = "fixest", taus = NULL) {
   stopifnot(length(x) == length(est), length(lo) == length(x),
             length(hi) == length(x))
   ok <- is.finite(x) & is.finite(est) & is.finite(lo) & is.finite(hi)
-  x <- x[ok]; est <- est[ok]; lo <- lo[ok]; hi <- hi[ok]
+  x <- x[ok]
+  est <- est[ok]
+  lo <- lo[ok]
+  hi <- hi[ok]
   if (!length(x)) {
     return(NULL)
   }
   ord <- order(x)
-  x <- x[ord]; est <- est[ord]; lo <- lo[ord]; hi <- hi[ord]
+  x <- x[ord]
+  est <- est[ord]
+  lo <- lo[ord]
+  hi <- hi[ord]
 
   js_ribbon <- htmlwidgets::JS("function(params, api) {
     if (params.dataIndex !== 0) return;
@@ -1039,9 +1045,11 @@ calc_fit_stats <- function(model, is_logistic, engine = "fixest", taus = NULL) {
   }")
 
   band_data <- lapply(seq_along(x), function(i) list(x[i], est[i], hi[i], lo[i]))
-  line_data <- lapply(seq_along(x), function(i) list(
-    value = list(x[i], est[i]), confLow = lo[i], confHigh = hi[i]
-  ))
+  line_data <- lapply(seq_along(x), function(i) {
+    list(
+      value = list(x[i], est[i]), confLow = lo[i], confHigh = hi[i]
+    )
+  })
 
   list(
     list(
@@ -1751,10 +1759,12 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
            e$x$opts$yAxis <- lapply(seq_along(tu), function(i) {
              d_i <- plot_data[plot_data$term == tu[[i]], , drop = FALSE]
              b_i <- rif_y_bounds(d_i)
-             axis <- if (i == 1L) yax else {
-                y <- value_y_axis("", b_i[[1L]], b_i[[2L]])
-                y
-              }
+             axis <- if (i == 1L) {
+               yax
+             } else {
+               y <- value_y_axis("", b_i[[1L]], b_i[[2L]])
+               y
+             }
               if (i == 1L) axis <- value_y_axis(
                 rif_y_lab, b_i[[1L]], b_i[[2L]], vertical_name = TRUE
               )
@@ -2032,9 +2042,11 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
             e$x$opts$yAxis <- lapply(seq_len(n_bins), function(i) {
               d_i <- combined[combined$bin_label == bin_levels[[i]], , drop = FALSE]
               b_i <- rif_y_bounds(d_i)
-              axis <- if (i == 1L) value_y_axis(
-                rif_y_lab, b_i[[1L]], b_i[[2L]], vertical_name = TRUE
-              ) else {
+              axis <- if (i == 1L) {
+                value_y_axis(
+                  rif_y_lab, b_i[[1L]], b_i[[2L]], vertical_name = TRUE
+                )
+              } else {
                 y <- value_y_axis("", b_i[[1L]], b_i[[2L]])
                y
              }
@@ -2068,10 +2080,12 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
         }
         if (has_legend) {
           e$x$opts$legend <- wise_elegend_style(
-            data = lapply(seq_along(modx_levels), function(i) list(
-              name = unname(modx_levels[i]), icon = "roundRect",
-              itemStyle = list(color = unname(cols[i]))
-            )),
+            data = lapply(seq_along(modx_levels), function(i) {
+              list(
+                name = unname(modx_levels[i]), icon = "roundRect",
+                itemStyle = list(color = unname(cols[i]))
+              )
+            }),
             left = "center", top = 4, orient = "horizontal"
           )
         }
@@ -2362,11 +2376,13 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
               max_val = round(y_max_val + y_pad, 3)
             ))
             e$x$opts$legend <- wise_elegend_style(
-              data = lapply(seq_along(modx_labels), function(i) list(
-                name = unname(modx_labels[i]),
-                icon = "roundRect",
-                itemStyle = list(color = unname(cols[i]))
-              )),
+              data = lapply(seq_along(modx_labels), function(i) {
+                list(
+                  name = unname(modx_labels[i]),
+                  icon = "roundRect",
+                  itemStyle = list(color = unname(cols[i]))
+                )
+              }),
               left = "center", top = 4, width = "92%", height = "32%",
               orient = "horizontal"
             )
@@ -2380,9 +2396,11 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
             e <- .e_caption(e, cap_binned)
             return(wise_echart_theme(e))
           },
-          error = function(e) echart_blank(paste0("Binned effect plot error: ", conditionMessage(e)),
-            height = height
-          )
+          error = function(e) {
+            echart_blank(paste0("Binned effect plot error: ", conditionMessage(e)),
+              height = height
+            )
+          }
         ))
       }
 
@@ -2599,8 +2617,9 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
           })
           series <- unlist(ribbon_trios, recursive = FALSE)
           if (length(rug_series)) series <- c(series, rug_series)
-          last_curve <- max(which(vapply(series, function(s) identical(s$type, "line") &&
-            !isTRUE(s$silent), logical(1))), 0L)
+          last_curve <- max(which(vapply(series, function(s) {
+            identical(s$type, "line") && !isTRUE(s$silent)
+          }, logical(1))), 0L)
           if (last_curve > 0L) {
             series[[last_curve]]$markLine <- markline_of(mean_mark)
             if (zero_is_boundary) {
@@ -2633,11 +2652,13 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
            }
           if (has_legend) {
             e$x$opts$legend <- wise_elegend_style(
-              data = lapply(seq_along(curves), function(i) list(
-                name = names(curves)[i],
-                icon = "roundRect",
-                itemStyle = list(color = unname(cols[i]))
-              )),
+              data = lapply(seq_along(curves), function(i) {
+                list(
+                  name = names(curves)[i],
+                  icon = "roundRect",
+                  itemStyle = list(color = unname(cols[i]))
+                )
+              }),
               left = "center", top = 0, orient = "horizontal"
             )
           }
@@ -2652,14 +2673,18 @@ echart_weather_effect_plot <- function(fit, pred_var, interaction_terms, is_binn
           e <- .e_caption(e, cap_text)
           wise_echart_theme(e)
         },
-        error = function(e) echart_blank(paste0("fixest effect plot error: ", conditionMessage(e)),
-          height = height
-        )
+        error = function(e) {
+          echart_blank(paste0("fixest effect plot error: ", conditionMessage(e)),
+            height = height
+          )
+        }
       )
     },
-    error = function(e) echart_blank(paste0("Effect plot error: ", conditionMessage(e)),
-      height = height
-    )
+    error = function(e) {
+      echart_blank(paste0("Effect plot error: ", conditionMessage(e)),
+        height = height
+      )
+    }
   )
 }
 
@@ -2855,9 +2880,11 @@ echart_residual_panels <- function(model, is_logistic = FALSE, height = "400px")
         e$x$opts$tooltip <- .e_effect_tooltip()
         wise_echart_theme(e)
       },
-      error = function(e) echart_blank(paste0(
-        "Diagnostic plot error: ", conditionMessage(e)
-      ), height = height)
+      error = function(e) {
+        echart_blank(paste0(
+          "Diagnostic plot error: ", conditionMessage(e)
+        ), height = height)
+      }
     ))
   }
 
@@ -2960,13 +2987,15 @@ echart_residual_panels <- function(model, is_logistic = FALSE, height = "400px")
           axisLabel = wise_eaxis_label(), splitLine = wise_esplit_line()
         )
       )
-      e$x$opts$grid <- lapply(seq_len(2L), function(i) list(
-        left = if (i == 1L) "8%" else "54%",
-        right = if (i == 1L) "54%" else "8%",
-        top = 44, bottom = 58,
-        width = "38%",
-        height = "auto", containLabel = TRUE
-      ))
+      e$x$opts$grid <- lapply(seq_len(2L), function(i) {
+        list(
+          left = if (i == 1L) "8%" else "54%",
+          right = if (i == 1L) "54%" else "8%",
+          top = 44, bottom = 58,
+          width = "38%",
+          height = "auto", containLabel = TRUE
+        )
+      })
       e$x$opts$title <- list(
         list(text = "Residuals vs fitted", left = "8%", top = 4,
           textStyle = list(color = .wise_charcoal, fontSize = 13, fontWeight = "normal")),
@@ -2992,9 +3021,11 @@ echart_residual_panels <- function(model, is_logistic = FALSE, height = "400px")
       e$x$opts$tooltip <- list(show = FALSE)
       wise_echart_theme(e)
     },
-    error = function(e) echart_blank(paste0(
-      "Diagnostic plot error: ", conditionMessage(e)
-    ), height = height)
+    error = function(e) {
+      echart_blank(paste0(
+        "Diagnostic plot error: ", conditionMessage(e)
+      ), height = height)
+    }
   )
 }
 
@@ -3174,9 +3205,11 @@ echart_pred_vs_actual <- function(model, is_logistic, outcome_label = "outcome",
       e$x$opts$tooltip <- .e_effect_tooltip(percent = TRUE)
       wise_echart_theme(e)
     },
-    error = function(e) echart_blank(paste0(
-      "Diagnostic plot error: ", conditionMessage(e)
-    ), height = height)
+    error = function(e) {
+      echart_blank(paste0(
+        "Diagnostic plot error: ", conditionMessage(e)
+      ), height = height)
+    }
   )
 }
 

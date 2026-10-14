@@ -45,7 +45,10 @@ mod_2_03_diagnostics_ui <- function(id) {
       shiny::uiOutput(ns("weather_support_warning_ui")),
       shiny::tags$p(
         class = "diagnostic-note",
-        "Distributions are normalized separately so samples with different sizes can be compared. Overlap does not by itself establish model validity."
+        paste0(
+          "Distributions are normalized separately so samples with different sizes can be compared. ",
+          "Overlap does not by itself establish model validity."
+        )
       )
     ),
 
@@ -71,7 +74,10 @@ mod_2_03_diagnostics_ui <- function(id) {
       ),
       shiny::tags$p(
         class = "diagnostic-note",
-        "Each scenario-coloured point is one climate model's mean across simulated weather-year draws. The orange point is the median model mean."
+        paste0(
+          "Each scenario-coloured point is one climate model's mean across simulated weather-year draws. ",
+          "The orange point is the median model mean."
+        )
       )
     ),
 
@@ -97,7 +103,13 @@ mod_2_03_diagnostics_ui <- function(id) {
       ),
       shiny::tags$p(
         class = "diagnostic-note",
-        "Each line shows a climate model's simulated annual outcome across weather-year draws; the bold line summarizes the across-model median. Historical weather-year draws are the reference, and future scenarios apply a delta-method perturbation to that historical reference. Projection windows are separate regimes, not continuous annual forecasts. See the documentation for details on the simulation and perturbation method."
+        paste0(
+          "Each line shows a climate model's simulated annual outcome across weather-year draws; ",
+          "the bold line summarizes the across-model median. Historical weather-year draws are the reference, ",
+          "and future scenarios apply a delta-method perturbation to that historical reference. ",
+          "Projection windows are separate regimes, not continuous annual forecasts. ",
+          "See the documentation for details on the simulation and perturbation method."
+        )
       )
     )
   )
@@ -440,7 +452,9 @@ mod_2_03_diagnostics_server <- function(id,
         req(!is.null(ch))
         ch
       },
-      description = "Weather input distributions for the selected plot variables across historical and simulated sources.",
+      description = paste0(
+        "Weather input distributions for the selected plot variables across historical and simulated sources."
+      ),
       width = 10, height = 6.5
     )
     wise_export_table(

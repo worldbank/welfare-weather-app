@@ -1000,7 +1000,11 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
 # TRUE when every location series has unique, gap-free months.
 .wx_roll_base_contiguous <- function(con, loc_monthly_sql) {
   n_bad <- DBI::dbGetQuery(con, sprintf(
-    "SELECT count(*) AS n FROM (SELECT 1 FROM (SELECT code, \"year\", survname, loc_id, YEAR(\"timestamp\") * 12 + MONTH(\"timestamp\") AS mi FROM (%s)) GROUP BY code, \"year\", survname, loc_id HAVING count(*) <> count(DISTINCT mi) OR count(*) <> max(mi) - min(mi) + 1)",
+    paste0(
+      "SELECT count(*) AS n FROM (SELECT 1 FROM (SELECT code, \"year\", survname, loc_id, ",
+      "YEAR(\"timestamp\") * 12 + MONTH(\"timestamp\") AS mi FROM (%s)) GROUP BY code, \"year\", survname, loc_id ",
+      "HAVING count(*) <> count(DISTINCT mi) OR count(*) <> max(mi) - min(mi) + 1)"
+    ),
     loc_monthly_sql
   ))$n
   isTRUE(as.numeric(n_bad) == 0)
@@ -1010,7 +1014,11 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
 .wx_roll_build_base <- function(con, loc_monthly_sql, selected_weather,
                                 pid_name, bl_name) {
   DBI::dbExecute(con, sprintf(
-    "CREATE TEMP TABLE %s AS SELECT code, \"year\", survname, loc_id, DENSE_RANK() OVER (ORDER BY code, \"year\", survname, loc_id)::INTEGER AS pid FROM (SELECT DISTINCT code, \"year\", survname, loc_id FROM (%s))",
+    paste0(
+      "CREATE TEMP TABLE %s AS SELECT code, \"year\", survname, loc_id, ",
+      "DENSE_RANK() OVER (ORDER BY code, \"year\", survname, loc_id)::INTEGER AS pid ",
+      "FROM (SELECT DISTINCT code, \"year\", survname, loc_id FROM (%s))"
+    ),
     pid_name, loc_monthly_sql
   ))
   lag_cols <- unlist(lapply(.wx_roll_specs(selected_weather), function(sp) {
@@ -1024,7 +1032,12 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
     }, character(1L))
   }))
   DBI::dbExecute(con, sprintf(
-    "CREATE TEMP TABLE %s AS SELECT p.pid, m.code, m.\"year\", m.survname, m.loc_id, m.\"timestamp\", MONTH(m.\"timestamp\")::INTEGER AS \"month\", %s FROM (%s) m INNER JOIN %s p ON m.code = p.code AND m.\"year\" = p.\"year\" AND m.survname = p.survname AND m.loc_id = p.loc_id WINDOW w AS (PARTITION BY p.pid ORDER BY YEAR(m.\"timestamp\") * 12 + MONTH(m.\"timestamp\"))",
+    paste0(
+      "CREATE TEMP TABLE %s AS SELECT p.pid, m.code, m.\"year\", m.survname, m.loc_id, m.\"timestamp\", ",
+      "MONTH(m.\"timestamp\")::INTEGER AS \"month\", %s FROM (%s) m INNER JOIN %s p ",
+      "ON m.code = p.code AND m.\"year\" = p.\"year\" AND m.survname = p.survname AND m.loc_id = p.loc_id ",
+      "WINDOW w AS (PARTITION BY p.pid ORDER BY YEAR(m.\"timestamp\") * 12 + MONTH(m.\"timestamp\"))"
+    ),
     bl_name, paste(lag_cols, collapse = ", "), loc_monthly_sql, pid_name
   ))
   invisible(TRUE)
@@ -1040,12 +1053,19 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
     DBI::dbQuoteIdentifier(con, paste0("delta_", sp$v))
   }, character(1L))
   DBI::dbExecute(con, sprintf(
-    "CREATE TEMP TABLE %s AS SELECT DENSE_RANK() OVER (ORDER BY d.model)::INTEGER AS mid, d.model, p.pid, d.\"month\"::INTEGER AS \"month\", %s FROM (%s) d INNER JOIN %s p ON d.code = p.code AND d.\"year\" = p.\"year\" AND d.survname = p.survname AND d.loc_id = p.loc_id",
+    paste0(
+      "CREATE TEMP TABLE %s AS SELECT DENSE_RANK() OVER (ORDER BY d.model)::INTEGER AS mid, d.model, p.pid, ",
+      "d.\"month\"::INTEGER AS \"month\", %s FROM (%s) d INNER JOIN %s p ",
+      "ON d.code = p.code AND d.\"year\" = p.\"year\" AND d.survname = p.survname AND d.loc_id = p.loc_id"
+    ),
     src_name, paste0("d.", dcols, collapse = ", "), delta_sql, pid_name
   ))
   on.exit(try(DBI::dbRemoveTable(con, src_name), silent = TRUE), add = TRUE)
   n_bad <- DBI::dbGetQuery(con, sprintf(
-    "SELECT count(*) AS n FROM (SELECT 1 FROM %s GROUP BY mid, pid HAVING count(*) <> 12 OR count(DISTINCT \"month\") <> 12)",
+    paste0(
+      "SELECT count(*) AS n FROM (SELECT 1 FROM %s GROUP BY mid, pid ",
+      "HAVING count(*) <> 12 OR count(DISTINCT \"month\") <> 12)"
+    ),
     src_name
   ))$n
   if (!isTRUE(as.numeric(n_bad) == 0)) return(FALSE)
@@ -1061,7 +1081,12 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
   }))
   keep_cols <- unlist(lapply(specs, function(sp) sprintf("d%d_%d", sp$i, sp$lags)))
   DBI::dbExecute(con, sprintf(
-    "CREATE TEMP TABLE %s AS SELECT model, pid, idx - 12 AS \"month\", %s FROM (SELECT model, pid, idx, %s FROM (SELECT s.*, s.\"month\" + 12 * j.j AS idx FROM %s s CROSS JOIN (VALUES (0), (1), (2)) AS j(j)) WINDOW w AS (PARTITION BY mid, pid ORDER BY idx)) WHERE idx BETWEEN 13 AND 24",
+    paste0(
+      "CREATE TEMP TABLE %s AS SELECT model, pid, idx - 12 AS \"month\", %s ",
+      "FROM (SELECT model, pid, idx, %s FROM (SELECT s.*, s.\"month\" + 12 * j.j AS idx FROM %s s ",
+      "CROSS JOIN (VALUES (0), (1), (2)) AS j(j)) WINDOW w AS (PARTITION BY mid, pid ORDER BY idx)) ",
+      "WHERE idx BETWEEN 13 AND 24"
+    ),
     dl_name, paste(keep_cols, collapse = ", "), paste(src_cols, collapse = ", "),
     src_name
   ))
@@ -1094,7 +1119,12 @@ WISEAPP_WX_LOC_CACHE_VERSION <- "v2"
   }, character(1L))
   dates <- unique(dates[!is.na(dates)])
   sprintf(
-    "SELECT model, code, \"year\", survname, loc_id, \"timestamp\", %s FROM (SELECT dl.model, bl.code, bl.\"year\", bl.survname, bl.loc_id, bl.\"timestamp\", %s FROM %s bl INNER JOIN %s dl ON bl.pid = dl.pid AND bl.\"month\" = dl.\"month\" WHERE bl.\"timestamp\" IN (%s))",
+    paste0(
+      "SELECT model, code, \"year\", survname, loc_id, \"timestamp\", %s ",
+      "FROM (SELECT dl.model, bl.code, bl.\"year\", bl.survname, bl.loc_id, bl.\"timestamp\", %s ",
+      "FROM %s bl INNER JOIN %s dl ON bl.pid = dl.pid AND bl.\"month\" = dl.\"month\" ",
+      "WHERE bl.\"timestamp\" IN (%s))"
+    ),
     paste(agg_cols, collapse = ", "), paste(term_cols, collapse = ", "),
     bl_name, dl_name,
     paste0("'", format(dates), "'::date", collapse = ", ")
@@ -1203,7 +1233,7 @@ get_weather <- function(
   # climate-reference window (max() against a Date below), the date filters
   # and the cache keys behave exactly as on the synchronous Date path.
   dates <- as.Date(dates)
-  weather_profile <-if (.wx_profile_enabled()) new.env(parent = emptyenv()) else NULL
+  weather_profile <- if (.wx_profile_enabled()) new.env(parent = emptyenv()) else NULL
   if (!is.null(weather_profile)) {
     weather_profile$records <- list()
     weather_profile$plan <- .wx_profile_plan()
@@ -1334,7 +1364,8 @@ get_weather <- function(
       selected_weather$transformation != "None"
   )
   if (needs_climate_ref) {
-    date_min <- min(date_min, seq.Date(as.Date("1991-01-01"), by = paste0("-", max_lag, " months"), length.out = 2L)[[2L]])
+    date_min <- min(date_min, seq.Date(as.Date("1991-01-01"),
+      by = paste0("-", max_lag, " months"), length.out = 2L)[[2L]])
     date_max <- max(date_max, as.Date("2020-12-31"))
   }
 
@@ -1351,7 +1382,9 @@ get_weather <- function(
     # full record serialises every frame and lists the process tree, which adds
     # roughly 70% to the wall time of a 2x2 run and hides where time goes.
     light <- .wx_env_flag("WISEAPP_WEATHER_PROFILE_LIGHT")
-    tables <- if (light) character() else {
+    tables <- if (light) {
+      character()
+    } else {
       tryCatch(DBI::dbListTables(con), error = function(e) character())
     }
     is_frame <- is.data.frame(value)
@@ -1578,7 +1611,10 @@ get_weather <- function(
       dbplyr::sql(sprintf(
         # CR-BUG-05: RANGE over a month index, so a missing month leaves a
         # hole in the window instead of pulling in an older month.
-        "%s(%s) FILTER (WHERE %s IS NOT NULL) OVER (PARTITION BY code, year, survname, loc_id ORDER BY (YEAR(timestamp) * 12 + MONTH(timestamp)) RANGE BETWEEN %d PRECEDING AND %d PRECEDING)",
+        paste0(
+          "%s(%s) FILTER (WHERE %s IS NOT NULL) OVER (PARTITION BY code, year, survname, loc_id ",
+          "ORDER BY (YEAR(timestamp) * 12 + MONTH(timestamp)) RANGE BETWEEN %d PRECEDING AND %d PRECEDING)"
+        ),
         agg_fn, v, v,
         as.integer(selected_weather$ref_end[i]),
         as.integer(selected_weather$ref_start[i])
@@ -1732,7 +1768,10 @@ get_weather <- function(
         v <- selected_weather$name[i]
         agg_fn <- agg_fn_map[[selected_weather$temporalAgg[i]]]
         dbplyr::sql(sprintf(
-          "%s(%s) FILTER (WHERE %s IS NOT NULL) OVER (PARTITION BY model, code, year, survname, loc_id ORDER BY (YEAR(timestamp) * 12 + MONTH(timestamp)) RANGE BETWEEN %d PRECEDING AND %d PRECEDING)",
+          paste0(
+            "%s(%s) FILTER (WHERE %s IS NOT NULL) OVER (PARTITION BY model, code, year, survname, loc_id ",
+            "ORDER BY (YEAR(timestamp) * 12 + MONTH(timestamp)) RANGE BETWEEN %d PRECEDING AND %d PRECEDING)"
+          ),
           agg_fn, v, v,
           as.integer(selected_weather$ref_end[i]),
           as.integer(selected_weather$ref_start[i])
@@ -2316,7 +2355,9 @@ get_weather <- function(
     .profile_record("complete", weather_profile$started, result, weather_profile$plan)
     profile_df <- if (length(weather_profile$records)) {
       do.call(rbind, weather_profile$records)
-    } else data.frame()
+    } else {
+      data.frame()
+    }
     attr(result, "weather_profile") <- profile_df
   }
 

@@ -168,8 +168,17 @@ mod_2_01_weathersim_ui <- function(id) {
         "Simulation residuals",
         info_popover(
           title = "Simulation residuals",
-          shiny::p(shiny::tags$b("original:"), " Recommended default: match each observation's own residual - assumes no changes due to changing hazards."),
-          shiny::p(shiny::tags$b("resample:"), " Secondary recommendation: randomly resample residuals from the model."),
+          shiny::p(
+            shiny::tags$b("original:"),
+            paste0(
+              " Recommended default: match each observation's own residual - ",
+              "assumes no changes due to changing hazards."
+            )
+          ),
+          shiny::p(
+            shiny::tags$b("resample:"),
+            " Secondary recommendation: randomly resample residuals from the model."
+          ),
           docs = TRUE
         ),
         style = "font-weight:600; margin-bottom:4px;"
@@ -522,7 +531,10 @@ mod_2_01_weathersim_server <- function(id,
       if (n_economies > 1 || n_years > 1) {
         shiny::helpText(
           shiny::tags$b("\u26a0 Warning:"),
-          "Using multiple survey years or economies is not recommended. Requires normalizing weights based on sample design, which is not currently implemented - verify before interpreting results.",
+          paste0(
+            "Using multiple survey years or economies is not recommended. Requires normalizing weights based on ",
+            "sample design, which is not currently implemented - verify before interpreting results."
+          ),
           style = "color: #c0392b; font-size: 11px; margin-top: 2px;"
         )
       }
@@ -611,7 +623,10 @@ mod_2_01_weathersim_server <- function(id,
       req(input$hist_years)
       if (length(input$hist_years[1]:input$hist_years[2]) < 30) {
         shiny::helpText(
-          "\u26a0\ufe0f Window is less than 30 years. This may not capture the full range of weather variability, which could lead to underestimation of future risks.",
+          paste0(
+            "\u26a0\ufe0f Window is less than 30 years. This may not capture the full range of weather variability, ",
+            "which could lead to underestimation of future risks."
+          ),
           style = "color: #c0392b; font-size: 12px;"
         )
       }
@@ -970,7 +985,8 @@ mod_2_01_weathersim_server <- function(id,
     # state, then this observer captures the snapshot safely.
     async_clicked_at_epoch <- shiny::reactiveVal(NA_real_)
 
-    submit_step2_async <- function() shiny::isolate({
+    submit_step2_async <- function() {
+      shiny::isolate({
       if (session_ended) return(invisible(NULL))
       if (!sim_guard$begin()) {
         return(invisible(NULL))
@@ -1019,7 +1035,9 @@ mod_2_01_weathersim_server <- function(id,
       ]
       captured_baseline <- if (length(baseline_labels)) {
         paste(baseline_labels, collapse = ", ")
-      } else "Selected baseline survey"
+      } else {
+        "Selected baseline survey"
+      }
       # R2-PERF-02: the worker gets a slim copy of the model fit (no fit1/fit2,
       # no captured fitting environments); the live fit stays untouched.
       mf_worker <- step2_slim_model_fit(mf)
@@ -1248,7 +1266,8 @@ mod_2_01_weathersim_server <- function(id,
         if (!isTRUE(job$settled)) async_job_id(job$id)
       }
       invisible(NULL)
-    })
+      })
+    }
 
     observeEvent(sim_run_event(),
       {

@@ -861,8 +861,10 @@ run_sim_pipeline <- function(weather_raw,
     (!is.null(id_vec) && length(id_vec) != n)) {
     return(unavailable("prediction row metadata is not aligned"))
   }
-  integral <- function(x) is.numeric(x) && all(is.finite(x)) &&
-    all(x == as.integer(x))
+  integral <- function(x) {
+    is.numeric(x) && all(is.finite(x)) &&
+      all(x == as.integer(x))
+  }
   if (!integral(exposure_id) || !integral(prediction_row_id) ||
     !integral(svy_row_id)) {
     return(unavailable("prediction row metadata contains nonintegral identifiers"))

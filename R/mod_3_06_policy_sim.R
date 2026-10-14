@@ -298,7 +298,8 @@ mod_3_06_policy_sim_server <- function(id,
       }
       # Publishes a computed run (from step3_compute() in this process or from
       # a worker). Errors are handled here so both paths report the same way.
-      publish <- function(computed, policy_sig) tryCatch(
+      publish <- function(computed, policy_sig) {
+        tryCatch(
         {
           svy_mod <- computed$svy_mod
           decomp_context <- computed$decomp_context
@@ -346,7 +347,9 @@ mod_3_06_policy_sim_server <- function(id,
           baseline_svy_rv(svy)
           # A shock program has no static transfer; for reach and diagnostics the
           # published frame marks households paid in at least one historical year.
-          policy_svy_rv(if (is.null(pol_out$shock)) svy_mod else {
+          policy_svy_rv(if (is.null(pol_out$shock)) {
+            svy_mod
+          } else {
             published <- svy_mod
             published[[SP_TRANSFER_COL]] <- pol_out$shock$per_household *
               pol_out$shock$paid_historical
@@ -400,7 +403,8 @@ mod_3_06_policy_sim_server <- function(id,
           }
           fail(e)
         }
-      )
+        )
+      }
 
       tryCatch(
         {
@@ -442,12 +446,14 @@ mod_3_06_policy_sim_server <- function(id,
               !session_ended && identical(run_generation(), generation) &&
                 identical(hist_sim()$.sig, hs$.sig)
             }
-            in_session <- function(fn) function(...) {
-              args <- list(...)
-              shiny::withReactiveDomain(session, shiny::isolate({
-                if (session_ended) return(invisible(NULL))
-                do.call(fn, args)
-              }))
+            in_session <- function(fn) {
+              function(...) {
+                args <- list(...)
+                shiny::withReactiveDomain(session, shiny::isolate({
+                  if (session_ended) return(invisible(NULL))
+                  do.call(fn, args)
+                }))
+              }
             }
             active_job <<- step3_async_submit(
               # The worker gets the slim model fit (no fitting environments,

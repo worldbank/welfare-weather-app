@@ -607,20 +607,18 @@ mod_1_07_results_server <- function(id,
           local({
             idx <- i
             term <- label_fun(mf$weather_terms[idx])
-            {
-              wise_export_figure(
-                key = paste0("coefficient_plot_", idx),
-                label = paste0("Coefficient stability - ", term),
-                step = 1L,
-                fun = coef_fig(idx, tau = rif_tau_default),
-                description = paste0(
-                  "Weather coefficients with confidence intervals across the three ",
-                  "nested specifications (specification 3 emphasised), for ", term,
-                  ". Outcome: ", outcome_snap$label, "."
-                ),
-                width = 9, height = 6
-              )
-            }
+            wise_export_figure(
+              key = paste0("coefficient_plot_", idx),
+              label = paste0("Coefficient stability - ", term),
+              step = 1L,
+              fun = coef_fig(idx, tau = rif_tau_default),
+              description = paste0(
+                "Weather coefficients with confidence intervals across the three ",
+                "nested specifications (specification 3 emphasised), for ", term,
+                ". Outcome: ", outcome_snap$label, "."
+              ),
+              width = 9, height = 6
+            )
             wise_export_figure(
               key = paste0("marginal_effect_plot_", idx),
               label = paste0("Weather-outcome relationship - ", term),
@@ -796,10 +794,16 @@ mod_1_07_results_server <- function(id,
           } else if (any(is_bin_vec)) {
             "Translations: per +1 SD for continuous weather terms; hottest bin vs reference bin for binned terms."
           } else {
-            "Per +1 SD uses the sample SD of each weather variable; see At a glance for the full contrast including interactions."
+            paste0(
+              "Per +1 SD uses the sample SD of each weather variable; see At a glance for the full contrast ",
+              "including interactions."
+            )
           },
           if (is_lpm) "Linear-probability model: predictions can fall outside 0\u20131." else NULL,
-          if (is_rif) "RIF coefficients are effects on unconditional quantiles in log points; % translation is approximate." else NULL
+          if (is_rif) paste0(
+            "RIF coefficients are effects on unconditional quantiles in log points; ",
+            "% translation is approximate."
+          ) else NULL
         )
         has_poly_terms <- any(grepl(
           "^I\\(",
@@ -846,7 +850,10 @@ mod_1_07_results_server <- function(id,
           notes <- c(
             focused_footnotes,
             if (has_poly_terms) {
-              "Polynomial terms are part of the +1 SD contrast of their base variable; their interaction slope differences vary with the weather level (see the moderated effect plot)."
+              paste0(
+                "Polynomial terms are part of the +1 SD contrast of their base variable; their interaction slope ",
+                "differences vary with the weather level (see the moderated effect plot)."
+              )
             } else {
               NULL
             }

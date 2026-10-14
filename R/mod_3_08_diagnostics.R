@@ -192,7 +192,11 @@
   if (is.null(df) || !nrow(df)) {
     return(df)
   }
-  unit_label <- if (identical(analysis_unit, "hh")) "Sample households affected / covered" else "Sample observations affected / covered"
+  unit_label <- if (identical(analysis_unit, "hh")) {
+    "Sample households affected / covered"
+  } else {
+    "Sample observations affected / covered"
+  }
   out <- data.frame(
     `Policy component` = df$component,
     setNames(list(suppressWarnings(as.numeric(df$n_affected))), unit_label),
@@ -315,7 +319,10 @@
       class = "results-section-card diagnostic-section-card",
       shiny::tags$p(
         class = "diagnostic-note",
-        "Social protection counts positive transfers; other rows count changed covariates. Overlap counts units touched by both. Only social protection has a cost."
+        paste0(
+          "Social protection counts positive transfers; other rows count changed covariates. ",
+          "Overlap counts units touched by both. Only social protection has a cost."
+        )
       ),
       shiny::div(
         class = "wise-reactable-controls",
@@ -356,7 +363,10 @@
       shiny::h5("Eligibility versus realized social-protection treatment"),
       shiny::tags$p(
         class = "diagnostic-note",
-        "Eligibility follows the selected rule; treatment is a positive transfer after errors. Rows show counterfactual assignment, not observed cash receipt."
+        paste0(
+          "Eligibility follows the selected rule; treatment is a positive transfer after errors. ",
+          "Rows show counterfactual assignment, not observed cash receipt."
+        )
       ),
       shiny::uiOutput(ns("treatment_explanation_ui")),
       shiny::div(
@@ -996,7 +1006,10 @@ mod_3_08_diagnostics_server <- function(id,
         )
       },
       stale = stale,
-      description = "Population affected or covered by social protection and other modeled policy components, including overlap."
+      description = paste0(
+        "Population affected or covered by social protection and other modeled policy components, ",
+        "including overlap."
+      )
     )
     invisible(NULL)
   })

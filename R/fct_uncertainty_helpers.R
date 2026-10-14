@@ -170,7 +170,10 @@ adverse_year_support <- function(values, sim_years, probability,
     weight_lo = NA_real_, weight_hi = NA_real_,
     quantile_method = "rank_interp_n_p_plus_half",
     tie_method = "value_then_sim_year_ascending")
-  fail <- function(reason) { empty$reason <- reason; empty }
+  fail <- function(reason) {
+    empty$reason <- reason
+    empty
+  }
   if (is.na(adverse_tail)) return(fail("Unknown adverse-tail direction."))
   if (!is.numeric(values) || !is.numeric(sim_years) || length(values) != length(sim_years)) {
     return(fail("Annual values and numeric year keys must have matching lengths."))
@@ -198,15 +201,19 @@ adverse_year_support <- function(values, sim_years, probability,
   if (!is.finite(k) || k < 1 || k > length(sorted_values)) {
     return(fail("Requested adverse rank is outside retained baseline-year support."))
   }
-  lo <- as.integer(floor(k)); hi <- as.integer(ceiling(k))
+  lo <- as.integer(floor(k))
+  hi <- as.integer(ceiling(k))
   whi <- if (lo == hi) 0 else k - lo
   wlo <- 1 - whi
   empty$status <- "ok"
   empty$reason <- ""
   empty$baseline_value <- wlo * sorted_values[lo] + whi * sorted_values[hi]
-  empty$rank_lo <- lo; empty$rank_hi <- hi
-  empty$year_lo <- sorted_years[lo]; empty$year_hi <- sorted_years[hi]
-  empty$weight_lo <- wlo; empty$weight_hi <- whi
+  empty$rank_lo <- lo
+  empty$rank_hi <- hi
+  empty$year_lo <- sorted_years[lo]
+  empty$year_hi <- sorted_years[hi]
+  empty$weight_lo <- wlo
+  empty$weight_hi <- whi
   empty
 }
 

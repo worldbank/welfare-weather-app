@@ -29,7 +29,9 @@ mod_3_02_infra_ui <- function(id) {
 #' parameters to be consumed by the policy simulation sub-module.
 #'
 #' @param id Module id.
-#' @param selected_model Reactive named list of the selected model's parameters from Step 1. Used to determine which infrastructure variables are in the model and should be shown in the UI.
+#' @param selected_model Reactive named list of the selected model's parameters from Step 1.
+#'   Used to determine which infrastructure variables are in the model and should be shown in
+#'   the UI.
 #'
 #' @return A named list of reactives:
 #'   \describe{
@@ -51,7 +53,10 @@ mod_3_02_infra_server <- function(id,
     coeffs <- coeffs_rx$all
 
     # Candidate variables for this category ----
-    infra_patterns <- c("electricity", "imp_wat_rec", "imp_san_rec", "ttime_health", "piped", "piped_to_prem", "imp_wat_san_rec")
+    infra_patterns <- c(
+      "electricity", "imp_wat_rec", "imp_san_rec", "ttime_health", "piped", "piped_to_prem",
+      "imp_wat_san_rec"
+    )
 
     any_selected <- reactive({
       any(tolower(infra_patterns) %in% tolower(coeffs()))

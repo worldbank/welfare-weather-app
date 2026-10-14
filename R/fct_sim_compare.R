@@ -811,7 +811,9 @@ step2_headline_cards <- function(bands,
   poor_2 <- if (both_20) poor_line(change_2) else NULL
   if (both_20) {
     val_2 <- display_value(change_2, change = TRUE)
-    line1_2 <- if (is_change) deviation_label else {
+    line1_2 <- if (is_change) {
+      deviation_label
+    } else {
       paste0(display_value(v20_hist, change = FALSE), arrow, display_value(v20_ssp, change = FALSE))
     }
     line2_2 <- if (is.null(rp_text)) {
@@ -908,7 +910,13 @@ step2_headline_cards <- function(bands,
   } else {
     "Unavailable"
   }
-  line1_3 <- if (is.finite(n_agree)) "agree on direction of change" else if (has_future) "no model comparison" else "Historical baseline"
+  line1_3 <- if (is.finite(n_agree)) {
+    "agree on direction of change"
+  } else if (has_future) {
+    "no model comparison"
+  } else {
+    "Historical baseline"
+  }
   line2_3 <- if (is.finite(snr)) {
     paste0("Shift is ", format(round(snr, 1), nsmall = 1), "\u00d7 the usual year-to-year swing")
   } else {
@@ -954,9 +962,15 @@ step2_headline_cards <- function(bands,
       dir <- headline_status(change_1, direction)
       list(
         kind = dir$kind %||% "neutral",
-        text = if (is.null(dir)) "Robust direction" else if (dir$kind == "favourable") {
+        text = if (is.null(dir)) {
+          "Robust direction"
+        } else if (dir$kind == "favourable") {
           "Robust: improves"
-        } else if (dir$kind == "adverse") "Robust: worsens" else "Robust direction"
+        } else if (dir$kind == "adverse") {
+          "Robust: worsens"
+        } else {
+          "Robust direction"
+        }
       )
     } else {
       list(kind = "uncertain", text = "Models disagree")
@@ -1087,7 +1101,9 @@ step2_headline_cards <- function(bands,
   sample_rows <- if (!is.null(hist_sim$svy)) nrow(hist_sim$svy) else NA_integer_
   prediction_count <- if (is.finite(sample_rows) && sample_rows > 0L) {
     as.numeric(total_runs) * sample_rows
-  } else NA_real_
+  } else {
+    NA_real_
+  }
   prediction_note <- format_prediction_count(prediction_count, metadata$analysis_unit)
 
   # Counts come from the simulated table itself (scenarios selected for
@@ -1229,7 +1245,9 @@ step2_headline_df <- function(cards, metadata = NULL, summary = NULL) {
     Display_unit = vapply(cards, function(card) {
       if (!identical(card$deviation %||% "none", "none")) {
         metadata$change_unit %||% "outcome units"
-      } else metadata$level_unit %||% "outcome units"
+      } else {
+        metadata$level_unit %||% "outcome units"
+      }
     }, character(1L)),
     Threshold_kind = rep(metadata$threshold_kind %||% "none", length(cards)),
     Threshold_value = rep(number_or_na(metadata$threshold_value), length(cards)),
@@ -1239,7 +1257,13 @@ step2_headline_df <- function(cards, metadata = NULL, summary = NULL) {
     Deviation = vapply(cards, function(c) as.character(c$deviation %||% "none"), character(1L)),
     Summary_method = summary_method,
     Summary_scope = rep(paste(
-      if (identical(metadata$weighted, TRUE)) "survey-weighted annual aggregate" else if (identical(metadata$weighted, FALSE)) "unweighted annual aggregate" else "annual aggregate; weight status unknown",
+      if (identical(metadata$weighted, TRUE)) {
+        "survey-weighted annual aggregate"
+      } else if (identical(metadata$weighted, FALSE)) {
+        "unweighted annual aggregate"
+      } else {
+        "annual aggregate; weight status unknown"
+      },
       "for fixed survey population; focus climate scenario"
     ), length(cards)),
     Context = rep(as.character(context)[1L], length(cards)),
@@ -2192,13 +2216,15 @@ echart_timeseries_spaghetti <- function(ts_tbl, x_label = "",
       colour = unname(scen_colour_map[[scn]] %||% "grey50"),
       width = 3, opacity = 1
     )[[1L]]
-    line$data <- lapply(seq_len(nrow(env)), function(j) list(
-      value = list(as.numeric(env$sim_year[[j]]), as.numeric(env$central[[j]])),
-      scenario = scn,
-      source = if (has_source) as.character(group$source[[1L]]) else NULL,
-      model = "Across-model mean",
-      kind = "median"
-    ))
+    line$data <- lapply(seq_len(nrow(env)), function(j) {
+      list(
+        value = list(as.numeric(env$sim_year[[j]]), as.numeric(env$central[[j]])),
+        scenario = scn,
+        source = if (has_source) as.character(group$source[[1L]]) else NULL,
+        model = "Across-model mean",
+        kind = "median"
+      )
+    })
     line$z <- 4
     series <- c(series, list(line))
     legend_names <- c(legend_names, label)

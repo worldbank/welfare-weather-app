@@ -573,13 +573,17 @@ apply_band_transform <- function(method, value_pt, se, z_lo, z_hi) {
       idx <- rows[[i]][valid[[i]]]
       F_full[idx, , drop = FALSE]
     })
-  } else NULL
+  } else {
+    NULL
+  }
   # Row sums of squares feed the headcount bandwidth tuning; computing them
   # once per prepared year removes a per-method O(N*K) pass (the multiply
   # dominates the cost for K beyond ~10).
   factor_row_ss <- if (!is.null(factor_blocks)) {
     lapply(factor_blocks, function(F_b) rowSums(F_b * F_b))
-  } else NULL
+  } else {
+    NULL
+  }
   prepared <- list(
     key = key,
     years = years,
@@ -677,28 +681,32 @@ aggregate_pipeline_per_year <- function(pipe,
     idx <- prep$rows[[i]][prep$valid[[i]]]
     F_idx <- if (!isTRUE(skip_coef) && !is.null(prep$factor_blocks)) {
       prep$factor_blocks[[i]]
-    } else NULL
+    } else {
+      NULL
+    }
     w_idx <- if (isTRUE(weighted)) prep$weights[[i]] else NULL
     m <- if (point_estimate_only) {
       aggregate_point_estimate(prep$mu[[i]], method, w_idx, pov_line)
-    } else aggregate_with_uncertainty_delta(
-      y_point = pipe$y_point[idx],
-      F_loading = F_idx,
-      method = method,
-      weights = w_idx,
-      pov_line = pov_line,
-      residuals = res_mode,
-      train_aug = train_aug,
-      id_vec = NULL,
-      id_col = id_col,
-      is_log = is_log,
-      band_q = band_q,
-      bandwidth_p0 = bandwidth_p0,
-      seed = wise_seed(seed, "residual", yr),
-      resid_lookup = NULL,
-      resid_sigma2 = sg2,
-      prepared_mu = prep$mu[[i]]
-    )
+    } else {
+      aggregate_with_uncertainty_delta(
+        y_point = pipe$y_point[idx],
+        F_loading = F_idx,
+        method = method,
+        weights = w_idx,
+        pov_line = pov_line,
+        residuals = res_mode,
+        train_aug = train_aug,
+        id_vec = NULL,
+        id_col = id_col,
+        is_log = is_log,
+        band_q = band_q,
+        bandwidth_p0 = bandwidth_p0,
+        seed = wise_seed(seed, "residual", yr),
+        resid_lookup = NULL,
+        resid_sigma2 = sg2,
+        prepared_mu = prep$mu[[i]]
+      )
+    }
     m$sim_year <- yr
     m$n_na_dropped <- prep$n_na_dropped[[i]]
     m$n_na_weight_dropped <- prep$n_na_weight_dropped[[i]]
@@ -796,10 +804,14 @@ aggregate_pipeline_per_year_multi <- function(pipe,
     idx <- prep$rows[[i]][prep$valid[[i]]]
     F_idx <- if (!isTRUE(skip_coef) && !is.null(prep$factor_blocks)) {
       prep$factor_blocks[[i]]
-    } else NULL
+    } else {
+      NULL
+    }
     F_row_ss <- if (!isTRUE(skip_coef) && !is.null(prep$factor_row_ss)) {
       prep$factor_row_ss[[i]]
-    } else NULL
+    } else {
+      NULL
+    }
     w_idx <- if (isTRUE(weighted)) prep$weights[[i]] else NULL
 
     # One kernel pass per distinct poverty line shares the scan and the sort
@@ -829,27 +841,29 @@ aggregate_pipeline_per_year_multi <- function(pipe,
       value <- if (point_estimate_only) {
         aggregate_point_estimate(prep$mu[[i]], method, w_idx, method_pov,
           prepared_value = picked$value)
-      } else aggregate_with_uncertainty_delta(
-        y_point = pipe$y_point[idx],
-        F_loading = F_idx,
-        method = method,
-        weights = w_idx,
-        pov_line = method_pov,
-        residuals = res_mode,
-        train_aug = train_aug,
-        id_vec = NULL,
-        id_col = id_col,
-        is_log = is_log,
-        band_q = band_q,
-        bandwidth_p0 = bandwidth_p0,
-        seed = wise_seed(seed, "residual", yr),
-        resid_lookup = NULL,
-        resid_sigma2 = sg2,
-        prepared_mu = prep$mu[[i]],
-        prepared_value = picked$value,
-        prepared_order = picked$order,
-        F_row_ss = F_row_ss
-      )
+      } else {
+        aggregate_with_uncertainty_delta(
+          y_point = pipe$y_point[idx],
+          F_loading = F_idx,
+          method = method,
+          weights = w_idx,
+          pov_line = method_pov,
+          residuals = res_mode,
+          train_aug = train_aug,
+          id_vec = NULL,
+          id_col = id_col,
+          is_log = is_log,
+          band_q = band_q,
+          bandwidth_p0 = bandwidth_p0,
+          seed = wise_seed(seed, "residual", yr),
+          resid_lookup = NULL,
+          resid_sigma2 = sg2,
+          prepared_mu = prep$mu[[i]],
+          prepared_value = picked$value,
+          prepared_order = picked$order,
+          F_row_ss = F_row_ss
+        )
+      }
       value$sim_year <- yr
       value$n_na_dropped <- prep$n_na_dropped[[i]]
       value$n_na_weight_dropped <- prep$n_na_weight_dropped[[i]]

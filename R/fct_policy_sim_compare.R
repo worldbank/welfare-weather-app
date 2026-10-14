@@ -363,7 +363,9 @@ echart_step3_annual_distribution <- function(tbl, x_label = "Outcome (outcome un
     if (!length(st) || any(!is.finite(st))) {
       return(NULL)
     }
-    q1 <- st[[2L]]; med <- st[[3L]]; q3 <- st[[4L]]
+    q1 <- st[[2L]]
+    med <- st[[3L]]
+    q3 <- st[[4L]]
     list(
       whisker = list(
         type = "line",
@@ -519,11 +521,13 @@ echart_step3_annual_distribution <- function(tbl, x_label = "Outcome (outcome un
     list(
       type = "scatter",
       name = paste("Mean", src),
-      data = lapply(seq_along(pts), function(i) list(
-        value = pts[[i]], outcome = m$value[[i]],
-        scenario = as.character(m$scenario_key[[i]]),
-        source = if (has_source) src else "All", mean = m$value[[i]], is_mean = TRUE
-      )),
+      data = lapply(seq_along(pts), function(i) {
+        list(
+          value = pts[[i]], outcome = m$value[[i]],
+          scenario = as.character(m$scenario_key[[i]]),
+          source = if (has_source) src else "All", mean = m$value[[i]], is_mean = TRUE
+        )
+      }),
       symbol = "circle",
       symbolSize = size,
       itemStyle = list(
@@ -868,7 +872,8 @@ echart_step3_adverse_dot <- function(tbl, x_label = "Outcome level",
   e$x$opts$legend <- list(
     top = 0, left = "center", selectedMode = FALSE,
     data = list(
-      list(name = "Baseline", icon = "circle", itemStyle = list(color = "white", borderColor = .wise_slate, borderWidth = 1.2)),
+      list(name = "Baseline", icon = "circle",
+        itemStyle = list(color = "white", borderColor = .wise_slate, borderWidth = 1.2)),
       list(name = "Policy", icon = "circle", itemStyle = list(color = .wise_policy, borderColor = .wise_policy_dark))
     ),
     textStyle = list(color = .wise_charcoal, fontSize = 12)
@@ -1056,7 +1061,9 @@ policy_input_diagnostics <- function(baseline_svy, policy_svy, vars = NULL) {
   type <- tolower(as.character(so$type %||% ""))[1L]
   model_type <- tolower(as.character(if (!is.null(context)) {
     context$model_type %||% ""
-  } else ""))[1L]
+  } else {
+    ""
+  }))[1L]
   unsupported <- type %in% c("binary", "logical", "boolean") ||
     model_type %in% c("logistic", "logistic regression", "binomial")
   list(status = if (unsupported) "unsupported" else "ok",
@@ -1129,7 +1136,9 @@ step3_headline_cards <- function(paired_summary,
   analysis_unit <- analysis_unit %||% spec$analysis_unit %||% NULL
   card_digits <- if (identical(method, "total")) 0L else 2L
   fmt_level <- function(x) if (is.finite(x)) format_metric_value(x, spec, digits = card_digits) else "Unavailable"
-  fmt_change <- function(x) if (is.finite(x)) format_metric_value(x, spec, change = TRUE, digits = card_digits) else "Unavailable"
+  fmt_change <- function(x) {
+    if (is.finite(x)) format_metric_value(x, spec, change = TRUE, digits = card_digits) else "Unavailable"
+  }
 
   # Levels and contrast must use the same matched model/year support.
   b_mean <- if ("baseline" %in% names(focus)) focus$baseline[[1L]] else NA_real_
@@ -1188,7 +1197,9 @@ step3_headline_cards <- function(paired_summary,
     info = paste(
       if (is.finite(b_mean) && is.finite(p_mean)) {
         paste0("Policy: ", fmt_level(p_mean), " vs baseline: ", fmt_level(b_mean), ".")
-      } else "",
+      } else {
+        ""
+      },
       "Equal-model mean.",
       "Paired difference (policy minus baseline) for the fixed population.",
       if (!is.null(ci_1)) paste(
@@ -1202,7 +1213,9 @@ step3_headline_cards <- function(paired_summary,
           focus$n_dropped_model_years[[1L]] > 0) {
         paste(focus$n_dropped_model_years[[1L]],
           "nonfinite matched model/year cells excluded from both endpoints and effect.")
-      } else ""
+      } else {
+        ""
+      }
     )
   )
 
@@ -1258,10 +1271,16 @@ step3_headline_cards <- function(paired_summary,
       if (is.null(rp_id) || !nzchar(rp_id)) {
         return(NA_real_)
       }
-      b <- threshold_tbl$value[threshold_tbl$scenario == focus_scen & threshold_tbl$source == "Baseline" &
-        threshold_tbl$rp_name == rp_id & threshold_tbl$Estimate %in% c("Equal-model mean", "Single historical estimate", "Central (P50)")]
-      p <- threshold_tbl$value[threshold_tbl$scenario == focus_scen & threshold_tbl$source == "Policy" &
-        threshold_tbl$rp_name == rp_id & threshold_tbl$Estimate %in% c("Equal-model mean", "Single historical estimate", "Central (P50)")]
+      b <- threshold_tbl$value[
+        threshold_tbl$scenario == focus_scen & threshold_tbl$source == "Baseline" &
+          threshold_tbl$rp_name == rp_id &
+          threshold_tbl$Estimate %in% c("Equal-model mean", "Single historical estimate", "Central (P50)")
+      ]
+      p <- threshold_tbl$value[
+        threshold_tbl$scenario == focus_scen & threshold_tbl$source == "Policy" &
+          threshold_tbl$rp_name == rp_id &
+          threshold_tbl$Estimate %in% c("Equal-model mean", "Single historical estimate", "Central (P50)")
+      ]
       if (length(b) && length(p) && is.finite(b[[1L]]) && is.finite(p[[1L]])) p[[1L]] - b[[1L]] else NA_real_
     }
     eff_10 <- get_eff(rp_10)
@@ -1292,14 +1311,18 @@ step3_headline_cards <- function(paired_summary,
       tail_row <- if (is.data.frame(tail) && nrow(tail)) {
         tail[tail$scenario == focus_scen & tail$scope == "baseline_anchored" &
           abs(tail$return_period - return_period) < 1e-8, , drop = FALSE]
-      } else data.frame()
+      } else {
+        data.frame()
+      }
       if (nrow(tail_row) && identical(tail_row$status[[1L]], "ok") &&
           is.finite(tail_row$total[[1L]])) tail_row$total[[1L]] else NA_real_
     }
     tail_20 <- if (is.data.frame(tail) && nrow(tail)) {
       tail[tail$scenario == focus_scen & tail$scope == "baseline_anchored" &
         abs(tail$return_period - 20) < 1e-8 & tail$status == "ok", , drop = FALSE]
-    } else data.frame()
+    } else {
+      data.frame()
+    }
     if (nrow(tail_20)) {
       metric_tail_focus <- tail_20[1L, , drop = FALSE]
       if (identical(metric_tail_focus$status[[1L]], "ok")) metric_focus_reason <- NULL
@@ -1329,7 +1352,9 @@ step3_headline_cards <- function(paired_summary,
   val_3 <- if (!is.null(metric_tail_focus) && resilience_modeled &&
       length(metric_tail_focus$resilience) && is.finite(metric_tail_focus$resilience[[1L]])) {
     fmt_change(metric_tail_focus$resilience[[1L]])
-  } else "Unavailable"
+  } else {
+    "Unavailable"
+  }
   main_text <- repositioning_text <- interaction_text <- "Unavailable"
   shock_text <- NULL
   if (!is.null(metric_focus)) {
@@ -1358,13 +1383,17 @@ step3_headline_cards <- function(paired_summary,
       fmt_change(metric_tail_focus$repositioning[[1L]])
     } else if (repositioning_modeled) {
       "Unavailable"
-    } else "Not modeled by this engine"
+    } else {
+      "Not modeled by this engine"
+    }
     interaction_text <- if (interaction_included && length(metric_tail_focus$interaction) &&
         is.finite(metric_tail_focus$interaction[[1L]])) {
       fmt_change(metric_tail_focus$interaction[[1L]])
     } else if (interaction_included) {
       "Unavailable"
-    } else "Not included in fitted model"
+    } else {
+      "Not included in fitted model"
+    }
   }
   # Context line: the number-of-poor equivalent and any component the engine
   # or fitted model does not provide. The total and main effects, and the full
@@ -1385,7 +1414,9 @@ step3_headline_cards <- function(paired_summary,
       collapse = " \u00b7 ")
   } else if (!is.null(metric_focus)) {
     "1-in-20 year attribution unavailable"
-  } else metric_focus_reason
+  } else {
+    metric_focus_reason
+  }
   line2_3 <- paste("1-in-20 year", "\u00b7", focus_scen)
 
   card2 <- list(
@@ -1417,7 +1448,9 @@ step3_headline_cards <- function(paired_summary,
     if (!is.null(fav) && fav$kind %in% c("favourable", "adverse")) {
       card2$status <- list(kind = fav$kind, text = if (fav$kind == "favourable") {
         "Reduces weather sensitivity"
-      } else "Increases weather sensitivity")
+      } else {
+        "Increases weather sensitivity"
+      })
     }
   }
 
@@ -1542,7 +1575,9 @@ step3_headline_cards <- function(paired_summary,
   sample_rows <- if (is.data.frame(baseline_svy)) nrow(baseline_svy) else NA_integer_
   prediction_count <- if (is.finite(sample_rows) && sample_rows > 0L) {
     as.numeric(total_runs) * sample_rows
-  } else NA_real_
+  } else {
+    NA_real_
+  }
   prediction_note <- format_prediction_count(prediction_count, analysis_unit)
 
   card4 <- list(
@@ -1786,10 +1821,26 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
 #' Inputs and outputs are namespaced via \code{ns()}.
 #' @noRd
 .results_pane_ui <- function(ns, so, weather_var = NULL) {
-  so_name <- if (!is.null(so) && "name" %in% names(so) && !is.null(so[["name"]])) as.character(so[["name"]][1]) else "welfare"
-  so_type <- if (!is.null(so) && "type" %in% names(so) && !is.null(so[["type"]])) as.character(so[["type"]][1]) else "numeric"
-  so_label <- if (!is.null(so) && "label" %in% names(so) && !is.null(so[["label"]])) as.character(so[["label"]][1]) else so_name
-  so_level <- if (!is.null(so) && "level" %in% names(so) && !is.null(so[["level"]])) as.character(so[["level"]][1]) else ""
+  so_name <- if (!is.null(so) && "name" %in% names(so) && !is.null(so[["name"]])) {
+    as.character(so[["name"]][1])
+  } else {
+    "welfare"
+  }
+  so_type <- if (!is.null(so) && "type" %in% names(so) && !is.null(so[["type"]])) {
+    as.character(so[["type"]][1])
+  } else {
+    "numeric"
+  }
+  so_label <- if (!is.null(so) && "label" %in% names(so) && !is.null(so[["label"]])) {
+    as.character(so[["label"]][1])
+  } else {
+    so_name
+  }
+  so_level <- if (!is.null(so) && "level" %in% names(so) && !is.null(so[["level"]])) {
+    as.character(so[["level"]][1])
+  } else {
+    ""
+  }
 
   outcome_lbl <- tolower(so_label)
   unit_lbl <- switch(tolower(so_level),
@@ -1807,12 +1858,14 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
 
   agg_choices <- hist_aggregate_choices(so_type, so_name)
 
-  pov_units <- if (!is.null(so) && "units" %in% names(so) && !is.null(so[["units"]]) && nzchar(as.character(so[["units"]][1]))) {
+  pov_units <- if (!is.null(so) && "units" %in% names(so) && !is.null(so[["units"]]) &&
+      nzchar(as.character(so[["units"]][1]))) {
     as.character(so[["units"]][1])
   } else {
     "selected outcome units"
   }
-  pov_val <- if (!is.null(so) && "povline" %in% names(so) && !is.null(so[["povline"]]) && is.finite(so[["povline"]][1]) && so[["povline"]][1] > 0) {
+  pov_val <- if (!is.null(so) && "povline" %in% names(so) && !is.null(so[["povline"]]) &&
+      is.finite(so[["povline"]][1]) && so[["povline"]][1] > 0) {
     so[["povline"]][1]
   } else {
     3.00
@@ -2175,7 +2228,9 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
       summary <- headline_paired_effect_summary_rv()
       focus <- if (nrow(summary)) {
         summary[summary$scenario == focus_scenario(), , drop = FALSE]
-      } else summary
+      } else {
+        summary
+      }
       df$baseline_native <- df$policy_native <- df$effect_native <- NA_real_
       if (nrow(focus)) {
         df$baseline_native[1L] <- focus$baseline[[1L]]
@@ -2642,8 +2697,13 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
     if (!is.null(last_metric_cache)) cancel_metric_jobs(last_metric_cache)
   })
   metric_cache <- reactive({
-    baseline_hist_sim(); policy_hist_sim(); annual_channels(); decomp_context()
-    baseline_saved_scenarios(); policy_saved_scenarios(); stale()
+    baseline_hist_sim()
+    policy_hist_sim()
+    annual_channels()
+    decomp_context()
+    baseline_saved_scenarios()
+    policy_saved_scenarios()
+    stale()
     policy_endpoint_status()
     if (!is.null(last_metric_cache)) cancel_metric_jobs(last_metric_cache)
     cache <- new.env(parent = emptyenv())
@@ -2741,9 +2801,11 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
           cache$entries <- utils::tail(entries, metric_cache_limit)
           metric_job_tick(shiny::isolate(metric_job_tick()) + 1L)
         }
-        in_session <- function(fn) function(...) {
-          args <- list(...)
-          shiny::withReactiveDomain(session, shiny::isolate(do.call(fn, args)))
+        in_session <- function(fn) {
+          function(...) {
+            args <- list(...)
+            shiny::withReactiveDomain(session, shiny::isolate(do.call(fn, args)))
+          }
         }
         job <- step3_metric_submit(
           snapshot = list(
@@ -3111,10 +3173,12 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
       sds <- mm$sds
       n_yrs <- ncol(vals)
       n_pts <- if (is_hist) sum(is.finite(as.numeric(vals))) else n_yrs
-      rp_ok <- vapply(RPs, function(p) all(vapply(seq_len(nrow(vals)), function(i) {
-        adverse_year_support(vals[i, ], suppressWarnings(as.numeric(mm$sim_years)),
-          p, adverse_tail)$status == "ok"
-      }, logical(1))), logical(1))
+      rp_ok <- vapply(RPs, function(p) {
+        all(vapply(seq_len(nrow(vals)), function(i) {
+          adverse_year_support(vals[i, ], suppressWarnings(as.numeric(mm$sim_years)),
+            p, adverse_tail)$status == "ok"
+        }, logical(1)))
+      }, logical(1))
       RPs_keep <- RPs[rp_ok]
       if (length(RPs_keep) == 0L) {
         return(NULL)
@@ -3279,7 +3343,9 @@ step3_adverse_dot_data <- function(threshold_tbl, method = "mean", so = NULL) {
         if (!is.finite(probability) || !probability %in% RP_LOW) next
         tail <- if (is.data.frame(tails) && nrow(tails)) {
           tails[tails$scenario == scenario & abs(tails$probability - probability) < 1e-8, , drop = FALSE]
-        } else data.frame()
+        } else {
+          data.frame()
+        }
         state <- if (identical(out$source[[i]], "Baseline")) "baseline" else "policy"
         available <- nrow(tail) && identical(tail$status[[1L]], "ok") && is.finite(tail[[state]][[1L]])
         out$value[[i]] <- if (available) tail[[state]][[1L]] - hr else NA_real_

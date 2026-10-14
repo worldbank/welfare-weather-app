@@ -258,7 +258,10 @@ mod_3_09_decomposition_ui <- function(id) {
         reactable::reactableOutput(ns("decile_decomp_table"))
       ),
       shiny::tags$p(class = "diagnostic-note",
-        "Effects are weighted means by baseline welfare decile, in the outcome's units or percent of baseline as selected. Uncertainty is not shown.")
+        paste0(
+          "Effects are weighted means by baseline welfare decile, in the outcome's units or ",
+          "percent of baseline as selected. Uncertainty is not shown."
+        ))
     ),
     shiny::uiOutput(ns("beta_curve_ui"))
   )
@@ -604,8 +607,9 @@ mod_3_09_decomposition_server <- function(id,
       table <- stats::setNames(data.frame(data$decile, channels, check.names = FALSE),
         c("Baseline welfare decile", names(channels)))
       num_defs <- stats::setNames(
-        lapply(names(channels), function(nm) reactable::colDef(
-          format = reactable::colFormat(digits = 4), minWidth = 70)),
+        lapply(names(channels), function(nm) {
+          reactable::colDef(format = reactable::colFormat(digits = 4), minWidth = 70)
+        }),
         names(channels))
       .step2_reactable(table, col_defs = num_defs)
     })
@@ -637,7 +641,10 @@ mod_3_09_decomposition_server <- function(id,
         stats::setNames(data.frame(data$decile, channels, check.names = FALSE),
           c("Baseline welfare decile", names(channels)))
       },
-      description = "Weighted average mean-metric channel contributions in registry outcome units by fixed baseline welfare decile.",
+      description = paste0(
+        "Weighted average mean-metric channel contributions in registry outcome units ",
+        "by fixed baseline welfare decile."
+      ),
       stale = stale
     )
     wise_export_figure(
@@ -645,7 +652,10 @@ mod_3_09_decomposition_server <- function(id,
       label = "Selected policy decomposition channels",
       step = 3L,
       fun = decomp_bar_chart,
-      description = "Weighted average mean-metric channel contributions in registry outcome units by fixed baseline welfare decile.",
+      description = paste0(
+        "Weighted average mean-metric channel contributions in registry outcome units ",
+        "by fixed baseline welfare decile."
+      ),
       width = 9, height = 6, stale = stale
     )
     output$decomp_bar_note_ui <- renderUI({
@@ -698,7 +708,10 @@ mod_3_09_decomposition_server <- function(id,
         ),
         shiny::tags$p(
           class = "diagnostic-note",
-          "These curves are defined by the model fit in Step 1 and do not change with the policy or climate selections in Steps 2-3."
+          paste0(
+            "These curves are defined by the model fit in Step 1 and do not change with the policy ",
+            "or climate selections in Steps 2-3."
+          )
         ),
         shiny::div(
           id = ns("beta_curve_section"),
@@ -766,7 +779,10 @@ mod_3_09_decomposition_server <- function(id,
               height = "400px"
             )
           },
-          description = "RIF weather coefficient by baseline welfare quantile; interpolation is limited to the estimated grid.",
+          description = paste0(
+            "RIF weather coefficient by baseline welfare quantile; ",
+            "interpolation is limited to the estimated grid."
+          ),
           width = 9, height = 6
         )
       })

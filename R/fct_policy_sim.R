@@ -1388,7 +1388,8 @@ apply_policy_to_svy <- function(svy,
         # keeps that sector's current count.
         sector_set <- .sector_target_set(labor$sector_manufacturing) ||
           .sector_target_set(labor$sector_services)
-        if (sector_set && all(c("employed", "selfemployed", "agriculture", "industry", "services") %in% lever_cols)) withr::with_seed(lever_seed("labor_sector"), {
+        if (sector_set && all(c("employed", "selfemployed", "agriculture", "industry", "services") %in%
+            lever_cols)) withr::with_seed(lever_seed("labor_sector"), {
           working <- (svy$employed == 1L | svy$selfemployed == 1L) &
             !is.na(svy$employed) & !is.na(svy$selfemployed)
 

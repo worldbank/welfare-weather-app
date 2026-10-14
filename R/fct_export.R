@@ -994,9 +994,15 @@ wise_export_readme <- function(entries, provenance = list(), config = list(),
     "| File | Contents |",
     "| --- | --- |",
     if ("config" %in% included) {
-      "| `configuration.json` | Every input in the app at export time, plus the random seed and per-step run provenance. Re-import it through Export -> Import configuration to restore this analysis. |"
+      paste0(
+        "| `configuration.json` | Every input in the app at export time, plus the random seed and ",
+        "per-step run provenance. Re-import it through Export -> Import configuration to restore this analysis. |"
+      )
     },
-    "| `manifest.csv` | Machine-readable index of every file below: name, kind, step, title, description, row/column counts, and registered metadata. |",
+    paste0(
+      "| `manifest.csv` | Machine-readable index of every file below: name, kind, step, title, description, ",
+      "row/column counts, and registered metadata. |"
+    ),
     "| `README.md` | This document. |",
     if ("tables" %in% included) {
       "| `*.csv` | One file per table the session produced. |"
@@ -1019,7 +1025,10 @@ wise_export_readme <- function(entries, provenance = list(), config = list(),
     "| Part | Meaning |",
     "| --- | --- |",
     "| `NN` | Two-digit sequence number. Sorting a directory by name reproduces the order of this document. |",
-    "| `stepN` | The pipeline step that produced the artefact: `step0` overview and data source, `step1` model welfare, `step2` climate scenarios, `step3` policy scenarios. |",
+    paste0(
+      "| `stepN` | The pipeline step that produced the artefact: `step0` overview and data source, ",
+      "`step1` model welfare, `step2` climate scenarios, `step3` policy scenarios. |"
+    ),
     "| `artefact-name` | Lowercase, hyphen-separated identifier for the artefact. |",
     "| `.ext` | `.csv` for tables, `.png` for figures. |",
     "",

@@ -677,7 +677,11 @@ ridge_echart_widget <- function(rd_data, ridge_levels, ridge_labels, styles,
         )
       } else {
         htmlwidgets::JS(
-          "function(v){var a=Math.abs(v);if(a>=1000){return (v/1000).toLocaleString('en-US',{maximumFractionDigits:1})+'k';}return String(Math.round(v*100)/100);}"
+          paste0(
+            "function(v){var a=Math.abs(v);if(a>=1000){return ",
+            "(v/1000).toLocaleString('en-US',{maximumFractionDigits:1})+'k';}return ",
+            "String(Math.round(v*100)/100);}"
+          )
         )
       }
     ),
@@ -711,7 +715,28 @@ ridge_echart_widget <- function(rd_data, ridge_levels, ridge_labels, styles,
     trigger = "axis",
     formatter = htmlwidgets::JS(
       sprintf(
-        "function(params){\n          var seen = {};\n          var rows = [];\n          var axis = params && params.length ? params[0].axisValue : '';\n          var axisNumber = Number(axis);\n          var axisLabel = isFinite(axisNumber) ? axisNumber.toLocaleString('en-US', {maximumFractionDigits: 2}) : axis;\n          var xName = %s;\n          (params || []).forEach(function(p){\n            var key = p.seriesName || '';\n            if (seen[key]) return;\n            seen[key] = true;\n            var share = Array.isArray(p.value) ? Number(p.value[2]) : NaN;\n            var suffix = isFinite(share) ? (share * 100).toLocaleString('en-US', {maximumFractionDigits: 1}) + '%% < x' : '';\n            rows.push((p.marker || '') + key + (suffix ? ': <b>' + suffix + '</b>' : ''));\n          });\n          return 'x = ' + axisLabel + (xName ? ' ' + xName : '') + (rows.length ? '<br/>' + rows.join('<br/>') : '');\n        }",
+        paste0(
+          "function(params){\n",
+          "          var seen = {};\n",
+          "          var rows = [];\n",
+          "          var axis = params && params.length ? params[0].axisValue : '';\n",
+          "          var axisNumber = Number(axis);\n",
+          "          var axisLabel = isFinite(axisNumber) ? axisNumber.toLocaleString('en-US', ",
+          "{maximumFractionDigits: 2}) : axis;\n",
+          "          var xName = %s;\n",
+          "          (params || []).forEach(function(p){\n",
+          "            var key = p.seriesName || '';\n",
+          "            if (seen[key]) return;\n",
+          "            seen[key] = true;\n",
+          "            var share = Array.isArray(p.value) ? Number(p.value[2]) : NaN;\n",
+          "            var suffix = isFinite(share) ? (share * 100).toLocaleString('en-US', ",
+          "{maximumFractionDigits: 1}) + '%% < x' : '';\n",
+          "            rows.push((p.marker || '') + key + (suffix ? ': <b>' + suffix + '</b>' : ''));\n",
+          "          });\n",
+          "          return 'x = ' + axisLabel + (xName ? ' ' + xName : '') + ",
+          "(rows.length ? '<br/>' + rows.join('<br/>') : '');\n",
+          "        }"
+        ),
         jsonlite::toJSON(tooltip_x_name %||% "", auto_unbox = TRUE)
       )
     )
@@ -821,30 +846,38 @@ echart_resid_weather <- function(model, haz_var, weather_df, x_label = haz_var,
       ),
       list(
         name = "Bin mean", type = "line",
-        data = lapply(seq_along(lvls), function(i) list(
-          value = list(i - 1L, unname(means[i])), symbolSize = 10
-        )),
+        data = lapply(seq_along(lvls), function(i) {
+          list(value = list(i - 1L, unname(means[i])), symbolSize = 10)
+        }),
         symbol = "circle", symbolSize = 10, showSymbol = TRUE, z = 10,
         lineStyle = list(color = .wise_marker_alt, width = 2),
         itemStyle = list(color = .wise_marker_alt),
         tooltip = list(
           show = TRUE,
           formatter = htmlwidgets::JS(
-            "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            paste0(
+              "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);",
+              "return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',",
+              "{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            )
           )
         )
       ),
       list(
         name = "Bin mean", type = "scatter",
-        data = lapply(seq_along(lvls), function(i) list(
-          value = list(i - 1L, unname(means[i])), symbolSize = 10
-        )),
+        data = lapply(seq_along(lvls), function(i) {
+          list(value = list(i - 1L, unname(means[i])), symbolSize = 10)
+        }),
         symbol = "circle", symbolSize = 9, z = 11,
         itemStyle = list(color = .wise_marker_alt),
         tooltip = list(
           show = TRUE,
           formatter = htmlwidgets::JS(
-            "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            paste0(
+              "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);",
+              "return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',",
+              "{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            )
           )
         )
       )
@@ -893,7 +926,11 @@ echart_resid_weather <- function(model, haz_var, weather_df, x_label = haz_var,
         tooltip = list(
           show = TRUE,
           formatter = htmlwidgets::JS(
-            "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            paste0(
+              "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);",
+              "return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',",
+              "{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            )
           )
         )
       ),
@@ -904,7 +941,11 @@ echart_resid_weather <- function(model, haz_var, weather_df, x_label = haz_var,
         tooltip = list(
           show = TRUE,
           formatter = htmlwidgets::JS(
-            "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            paste0(
+              "function(p){var v=Array.isArray(p.value)?Number(p.value[1]):Number(p.value);",
+              "return isFinite(v)?'Mean residual: <b>'+v.toLocaleString('en-US',",
+              "{minimumFractionDigits:2,maximumFractionDigits:2})+'</b>':'';}"
+            )
           )
         )
       )

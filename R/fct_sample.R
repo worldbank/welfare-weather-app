@@ -1,7 +1,7 @@
 # Survey sample selection helpers ----
 # Pure functions for survey sample selection logic.                            #
 # Used by mod_1_01_sample_server().
-# All functions are stateless and testable without a Shiny session.                                                     #
+# All functions are stateless and testable without a Shiny session.
 
 # File listing ----
 

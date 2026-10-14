@@ -1,7 +1,7 @@
 # Outcome selection helpers ----
 # Pure functions for outcome variable selection logic.                         #
 # Used by mod_1_03_outcome_server().
-# All functions are stateless and testable without a Shiny session.                                                     #
+# All functions are stateless and testable without a Shiny session.
 
 
 # Available outcomes ----

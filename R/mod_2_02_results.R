@@ -1,10 +1,26 @@
 #' Results tab content UI (inserted into the Results tabPanel once).
 #' @noRd
 .results_content_ui <- function(ns, so, weather_var = NULL) {
-  so_name <- if (!is.null(so) && "name" %in% names(so) && !is.null(so[["name"]])) as.character(so[["name"]][1]) else "welfare"
-  so_type <- if (!is.null(so) && "type" %in% names(so) && !is.null(so[["type"]])) as.character(so[["type"]][1]) else "numeric"
-  so_label <- if (!is.null(so) && "label" %in% names(so) && !is.null(so[["label"]])) as.character(so[["label"]][1]) else so_name
-  so_level <- if (!is.null(so) && "level" %in% names(so) && !is.null(so[["level"]])) as.character(so[["level"]][1]) else ""
+  so_name <- if (!is.null(so) && "name" %in% names(so) && !is.null(so[["name"]])) {
+    as.character(so[["name"]][1])
+  } else {
+    "welfare"
+  }
+  so_type <- if (!is.null(so) && "type" %in% names(so) && !is.null(so[["type"]])) {
+    as.character(so[["type"]][1])
+  } else {
+    "numeric"
+  }
+  so_label <- if (!is.null(so) && "label" %in% names(so) && !is.null(so[["label"]])) {
+    as.character(so[["label"]][1])
+  } else {
+    so_name
+  }
+  so_level <- if (!is.null(so) && "level" %in% names(so) && !is.null(so[["level"]])) {
+    as.character(so[["level"]][1])
+  } else {
+    ""
+  }
 
   outcome_lbl <- tolower(so_label)
   unit_lbl <- switch(tolower(so_level),
@@ -16,19 +32,23 @@
 
   wx_phrase <- format_weather_heading_phrase(weather_var)
   sec1_heading <- if (nzchar(wx_phrase)) {
-    paste0("How is ", outcome_lbl, " predicted to vary with ", wx_phrase, " across climate scenarios?")
+    paste0(
+      "How is ", outcome_lbl, " predicted to vary with ", wx_phrase, " across climate scenarios?"
+    )
   } else {
     paste0("How is ", outcome_lbl, " predicted to vary across climate scenarios and weather years?")
   }
 
   agg_choices <- hist_aggregate_choices(so_type, so_name)
 
-  pov_units <- if (!is.null(so) && "units" %in% names(so) && !is.null(so[["units"]]) && nzchar(as.character(so[["units"]][1]))) {
+  pov_units <- if (!is.null(so) && "units" %in% names(so) && !is.null(so[["units"]]) &&
+    nzchar(as.character(so[["units"]][1]))) {
     as.character(so[["units"]][1])
   } else {
     "$/day, 2021 PPP"
   }
-  pov_val <- if (!is.null(so) && "povline" %in% names(so) && !is.null(so[["povline"]]) && is.finite(so[["povline"]][1]) && so[["povline"]][1] > 0) {
+  pov_val <- if (!is.null(so) && "povline" %in% names(so) && !is.null(so[["povline"]]) &&
+    is.finite(so[["povline"]][1]) && so[["povline"]][1] > 0) {
     so[["povline"]][1]
   } else {
     3.00
@@ -113,7 +133,10 @@
           shiny::div(
             class = "text-muted small",
             style = "font-size: 0.8rem;",
-            "Prosperity gap uses a fixed threshold of 28; currency and time applicability are described in the headline context."
+            paste0(
+              "Prosperity gap uses a fixed threshold of 28; currency and time applicability ",
+              "are described in the headline context."
+            )
           )
         )
       )
@@ -161,7 +184,11 @@
       shiny::tags$p(
         class = "text-muted small",
         style = "margin-top: 18px; margin-bottom: 0;",
-        "Each dot is one simulated weather-year annual aggregate for the fixed baseline population. The selected violin or boxplot summarizes the distribution; open circles mark scenario means. This captures weather-year variability, not household inequality."
+        paste0(
+          "Each dot is one simulated weather-year annual aggregate for the fixed baseline population. ",
+          "The selected violin or boxplot summarizes the distribution; open circles mark scenario means. ",
+          "This captures weather-year variability, not household inequality."
+        )
       )
     ),
 
@@ -209,7 +236,11 @@
       shiny::tags$p(
         class = "text-muted small",
         style = "margin-top: 8px; margin-bottom: 0;",
-        "Points are equal-weight means across climate models of each model's expected and adverse-year values. Adverse tail direction is mapped automatically according to the selected outcome metric. Horizontal bars show inter-model ensemble spread across climate projections."
+        paste0(
+          "Points are equal-weight means across climate models of each model's expected and adverse-year values. ",
+          "Adverse tail direction is mapped automatically according to the selected outcome metric. ",
+          "Horizontal bars show inter-model ensemble spread across climate projections."
+        )
       )
     ),
 
@@ -257,7 +288,13 @@
       shiny::tags$p(
         class = "text-muted small",
         style = "margin-top: 8px; margin-bottom: 0;",
-        "Read each curve as the annual probability of reaching an outcome level in the adverse direction: lower outcomes for higher-is-better measures and higher outcomes for lower-is-better measures. Coloured lines show the across-model median; shaded ribbons show climate-model disagreement for each future baseline and policy series. Return-period guides and ticks are limited to the available simulated years per climate model; unsupported periods are not extrapolated."
+        paste0(
+          "Read each curve as the annual probability of reaching an outcome level in the adverse direction: ",
+          "lower outcomes for higher-is-better measures and higher outcomes for lower-is-better measures. ",
+          "Coloured lines show the across-model median; shaded ribbons show climate-model disagreement for each ",
+          "future baseline and policy series. Return-period guides and ticks are limited to the available simulated ",
+          "years per climate model; unsupported periods are not extrapolated."
+        )
       )
     ),
 
@@ -287,7 +324,11 @@
       shiny::tags$p(
         class = "text-muted small",
         style = "margin-top: 8px; margin-bottom: 0;",
-          "Adverse point estimates use the selected metric's baseline annual quantile within each model and an equal-model mean across SSP models; this differs from distribution-curve medians. Bounds are existing diagnostics, not uncertainty estimates for the equal-model mean."
+          paste0(
+            "Adverse point estimates use the selected metric's baseline annual quantile within each model and an ",
+            "equal-model mean across SSP models; this differs from distribution-curve medians. Bounds are existing ",
+            "diagnostics, not uncertainty estimates for the equal-model mean."
+          )
       )
     ),
 
@@ -301,8 +342,14 @@
           "year-to-year weather variability, climate-model disagreement, and model-estimation uncertainty."
         ),
         shiny::p(
-          "Coefficient uncertainty is the analytic delta-method standard error from the fitted model's coefficient covariance matrix",
-          "(plus residual-draw variance when stochastic residuals are enabled). It is shown as one standard deviation, not a 95% confidence interval;",
+          paste0(
+            "Coefficient uncertainty is the analytic delta-method standard error from the fitted model's ",
+            "coefficient covariance matrix"
+          ),
+          paste0(
+            "(plus residual-draw variance when stochastic residuals are enabled). It is shown as one standard ",
+            "deviation, not a 95% confidence interval;"
+          ),
           "an approximate normal 95% interval would be estimate +/- 1.96 times this value."
         ),
         shiny::p(
@@ -322,7 +369,13 @@
       shiny::tags$p(
         class = "text-muted small",
         style = "margin-top: 8px; margin-bottom: 0;",
-        "Bars are standard deviations in outcome units, not confidence intervals. Inter-annual variability is the within-model standard deviation across simulated weather years; inter-model spread is the standard deviation of model means across climate models; coefficient uncertainty is the analytic delta-method SE from the fitted model covariance (plus any enabled stochastic residual variance)."
+        paste0(
+          "Bars are standard deviations in outcome units, not confidence intervals. ",
+          "Inter-annual variability is the within-model standard deviation across simulated weather years; ",
+          "inter-model spread is the standard deviation of model means across climate models; ",
+          "coefficient uncertainty is the analytic delta-method SE from the fitted model covariance ",
+          "(plus any enabled stochastic residual variance)."
+        )
       )
     )
   )
@@ -1057,7 +1110,10 @@ mod_2_02_results_server <- function(id,
               # R2-PERF-04: line-free and line-dependent metrics are separate suites.
               group <- .aggregation_suite_group(method, agg_methods())
               suite_pov <- if (group$poverty_dependent) pl_v %||% 3 else "none"
-              suite_key <- paste0("hist_suite_", weighted, "_", format(suite_pov), "_", format(bandwidth_p0()), "_", group$poverty_dependent)
+              suite_key <- paste0(
+                "hist_suite_", weighted, "_", format(suite_pov), "_", format(bandwidth_p0()), "_",
+                group$poverty_dependent
+              )
             shared_key <- shared_aggregation_cache_key(
               ws$hs$.sig %||% list(pipeline = "step2"), suite_pov,
               bandwidth_p0(), weighted, ws$res, ws$skip, is_log, group$methods
@@ -1131,7 +1187,10 @@ mod_2_02_results_server <- function(id,
              if ((isTRUE(weighted) || !isTRUE(has_w)) && !identical(method, "prosperity_gap")) {
               group <- .aggregation_suite_group(method, agg_methods())
               suite_pov <- if (group$poverty_dependent) pl_v %||% 3 else "none"
-              suite_key <- paste0("scenario_suite_", names(sc)[[s_idx]], "_", format(suite_pov), "_", format(bandwidth_p0()), "_", group$poverty_dependent)
+              suite_key <- paste0(
+                "scenario_suite_", names(sc)[[s_idx]], "_", format(suite_pov), "_", format(bandwidth_p0()), "_",
+                group$poverty_dependent
+              )
              suite <- get0(suite_key, envir = ws$weighted_suite_cache)
              if (is.null(suite)) {
                suite <- aggregate_pipeline_tables_multi(
@@ -1647,7 +1706,10 @@ mod_2_02_results_server <- function(id,
         support <- attr(threshold_table_rv(), "adverse_support")
         if (is.data.frame(support)) support else data.frame()
       }),
-      description = "Per-model annual selected-metric baseline quantile and interpolation year-rank support. SSP point centers are equal-model means."
+      description = paste0(
+        "Per-model annual selected-metric baseline quantile and interpolation year-rank support. ",
+        "SSP point centers are equal-model means."
+      )
     )
 
     # Only the expected headline changes center; all existing chart/threshold
@@ -1902,11 +1964,13 @@ mod_2_02_results_server <- function(id,
 
         # Each model must independently support each rank; a longer member
         # cannot manufacture support for a shorter one.
-        rp_ok <- vapply(RPs, function(p) all(vapply(seq_len(nrow(vals)), function(i) {
-          support <- adverse_year_support(vals[i, ], suppressWarnings(as.numeric(mm$sim_years)),
-            p, adverse_tail)
-          identical(support$status, "ok")
-        }, logical(1))), logical(1))
+        rp_ok <- vapply(RPs, function(p) {
+          all(vapply(seq_len(nrow(vals)), function(i) {
+            support <- adverse_year_support(vals[i, ], suppressWarnings(as.numeric(mm$sim_years)),
+              p, adverse_tail)
+            identical(support$status, "ok")
+          }, logical(1)))
+        }, logical(1))
         RPs_keep <- RPs[rp_ok]
         if (length(RPs_keep) == 0L) {
           return(NULL)
@@ -1933,9 +1997,14 @@ mod_2_02_results_server <- function(id,
             applied <- apply_adverse_year_support(vals[i, ], suppressWarnings(as.numeric(mm$sim_years)), support)
             per_model_rp[i, j] <- applied$value
             sd_value <- if (identical(support$year_lo, support$year_hi) && support$weight_hi == 0) {
-              if (is.finite(sds[i, match(support$year_lo, sd_years)])) sds[i, match(support$year_lo, sd_years)] else NA_real_
+              if (is.finite(sds[i, match(support$year_lo, sd_years)])) {
+                sds[i, match(support$year_lo, sd_years)]
+              } else {
+                NA_real_
+              }
             } else {
-              lo <- match(support$year_lo, sd_years); hi <- match(support$year_hi, sd_years)
+              lo <- match(support$year_lo, sd_years)
+              hi <- match(support$year_hi, sd_years)
               if (anyNA(c(lo, hi)) || any(!is.finite(sds[i, c(lo, hi)]))) NA_real_ else
                 support$weight_lo * sds[i, lo] + support$weight_hi * sds[i, hi]
             }
@@ -2058,8 +2127,14 @@ mod_2_02_results_server <- function(id,
       step = 2L,
       fun = .committed_only(function() step2_headline_df(headline_cards_data_rv())),
       description = paste(
-        "Headline values are display-formatted; native numeric endpoints, units, selected deviation, metric context, and summary operators are included.",
-        "Expected, model-agreement and range summaries average years within model and weight climate models equally; adverse annual selected-metric quantiles use an equal-model mean."
+        paste0(
+          "Headline values are display-formatted; native numeric endpoints, units, selected deviation, metric ",
+          "context, and summary operators are included."
+        ),
+        paste0(
+          "Expected, model-agreement and range summaries average years within model and weight climate models ",
+          "equally; adverse annual selected-metric quantiles use an equal-model mean."
+        )
       )
     )
 
@@ -2086,7 +2161,10 @@ mod_2_02_results_server <- function(id,
       label = "Simulated welfare by scenario and period",
       step = 2L,
       fun = .committed_only(pointrange_chart),
-      description = "Simulated welfare by climate scenario and projection period; equal-weight mean across climate-model means, the same centre as the expected headline.",
+      description = paste0(
+        "Simulated welfare by climate scenario and projection period; equal-weight mean across climate-model means, ",
+        "the same centre as the expected headline."
+      ),
       width = 10, height = 6.5
     )
 
@@ -2168,7 +2246,9 @@ mod_2_02_results_server <- function(id,
         annotate_visualization_export(
           incidence_data_rv(), .selected_method(), hist_sim()$so,
           observation_unit = "household-level simulated welfare effect",
-          aggregation_order = "fixed weighted observed baseline decile; weighted mean over households and model summaries",
+          aggregation_order = paste0(
+            "fixed weighted observed baseline decile; weighted mean over households and model summaries"
+          ),
           uncertainty = "scenario/model variation summarized by selected model set"
         )
       }),
@@ -2193,7 +2273,9 @@ mod_2_02_results_server <- function(id,
       label = "Annual outcome distribution across weather years",
       step = 2L,
       fun = .committed_only(annual_distribution_chart),
-      description = "Annual aggregate distribution for the fixed population; one observation is one model-weather-year draw.",
+      description = paste0(
+        "Annual aggregate distribution for the fixed population; one observation is one model-weather-year draw."
+      ),
       width = 10, height = 6.5
     )
     wise_export_table(
@@ -2252,7 +2334,12 @@ mod_2_02_results_server <- function(id,
       label = "Climate simulation uncertainty sources",
       step = 2L,
       fun = .committed_only(uncertainty_chart),
-      description = "Standard deviation contribution from weather-year, coefficient, residual, and climate-model uncertainty sources.",
+      description = paste0(
+        paste0(
+          "Standard deviation contribution from weather-year, coefficient, residual, and climate-model ",
+          "uncertainty sources."
+        )
+      ),
       width = 9, height = 5
     )
 
@@ -2263,7 +2350,9 @@ mod_2_02_results_server <- function(id,
         table$Estimate %in% c("Single historical estimate", "Equal-model mean", "Central (P50)")
       historical_year_count <- if ("n_obs" %in% names(table) && any(historical_rows)) {
         max(as.numeric(table$n_obs[historical_rows]), na.rm = TRUE)
-      } else NA_real_
+      } else {
+        NA_real_
+      }
       rp_map <- metric_decision_return_periods(.selected_method(), results_source()$so)
       if (is.finite(historical_year_count)) {
         rp_map <- rp_map[names(rp_map) == "Expected" |
@@ -2486,7 +2575,10 @@ mod_2_02_results_server <- function(id,
           ), silent = TRUE)
         }
 
-        sw_obj <- tryCatch(if (is.function(selected_weather)) selected_weather() else selected_weather, error = function(e) NULL)
+        sw_obj <- tryCatch(
+          if (is.function(selected_weather)) selected_weather() else selected_weather,
+          error = function(e) NULL
+        )
         wx_lbl <- if (!is.null(sw_obj) && "label" %in% names(sw_obj) && length(sw_obj$label)) {
           paste(tolower(sw_obj$label), collapse = ", ")
         } else if (!is.null(sw_obj) && "name" %in% names(sw_obj) && length(sw_obj$name)) {

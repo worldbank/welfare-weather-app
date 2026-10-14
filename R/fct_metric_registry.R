@@ -1,15 +1,63 @@
 # Metric metadata ----
 
 .WISE_METRIC_REGISTRY <- list(
-  mean = list(label = "Mean", native_unit = "outcome units", format = "number", direction = "higher_is_better", change_kind = "absolute", percent_change = TRUE, poverty_line = FALSE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Weighted annual aggregate for the fixed survey population."),
-  median = list(label = "Median", native_unit = "outcome units", format = "number", direction = "higher_is_better", change_kind = "absolute", percent_change = TRUE, poverty_line = FALSE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Weighted median aggregate; not a household distribution."),
-  total = list(label = "Population weighted sum", native_unit = "outcome units", format = "number", direction = "higher_is_better", change_kind = "absolute", percent_change = TRUE, poverty_line = FALSE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Sum of the selected outcome using survey weights when available."),
-  headcount_ratio = list(label = "Poverty rate", native_unit = "fraction", format = "percent", direction = "lower_is_better", change_kind = "percentage_points", poverty_line = TRUE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Share below the selected poverty line; changes are percentage points."),
-  gap = list(label = "Poverty gap", native_unit = "fraction", format = "percent", direction = "lower_is_better", change_kind = "percentage_points", poverty_line = TRUE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Average normalized shortfall below the selected poverty line."),
-  fgt2 = list(label = "Poverty severity", native_unit = "fraction", format = "percent", direction = "lower_is_better", change_kind = "percentage_points", poverty_line = TRUE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Squared normalized poverty shortfall."),
-  gini = list(label = "Gini coefficient", native_unit = "native Gini index", format = "number", direction = "lower_is_better", change_kind = "index_points", poverty_line = FALSE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Relative inequality index on its native scale."),
-  prosperity_gap = list(label = "Prosperity gap", native_unit = "ratio", format = "number", direction = "lower_is_better", change_kind = "absolute", poverty_line = TRUE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Gap relative to the fixed threshold of 28; the selected poverty line is not used."),
-  avg_poverty = list(label = "Average poverty", native_unit = "inverse outcome units", format = "number", direction = "lower_is_better", change_kind = "absolute", poverty_line = FALSE, engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"), caveat = "Mean inverse welfare over eligible positive-welfare rows only.")
+  mean = list(
+    label = "Mean", native_unit = "outcome units", format = "number",
+    direction = "higher_is_better", change_kind = "absolute", percent_change = TRUE,
+    poverty_line = FALSE, engines = c("ols", "rif"),
+    uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Weighted annual aggregate for the fixed survey population."
+  ),
+  median = list(
+    label = "Median", native_unit = "outcome units", format = "number",
+    direction = "higher_is_better", change_kind = "absolute", percent_change = TRUE,
+    poverty_line = FALSE, engines = c("ols", "rif"),
+    uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Weighted median aggregate; not a household distribution."
+  ),
+  total = list(
+    label = "Population weighted sum", native_unit = "outcome units", format = "number",
+    direction = "higher_is_better", change_kind = "absolute", percent_change = TRUE,
+    poverty_line = FALSE, engines = c("ols", "rif"),
+    uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Sum of the selected outcome using survey weights when available."
+  ),
+  headcount_ratio = list(
+    label = "Poverty rate", native_unit = "fraction", format = "percent",
+    direction = "lower_is_better", change_kind = "percentage_points", poverty_line = TRUE,
+    engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Share below the selected poverty line; changes are percentage points."
+  ),
+  gap = list(
+    label = "Poverty gap", native_unit = "fraction", format = "percent",
+    direction = "lower_is_better", change_kind = "percentage_points", poverty_line = TRUE,
+    engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Average normalized shortfall below the selected poverty line."
+  ),
+  fgt2 = list(
+    label = "Poverty severity", native_unit = "fraction", format = "percent",
+    direction = "lower_is_better", change_kind = "percentage_points", poverty_line = TRUE,
+    engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Squared normalized poverty shortfall."
+  ),
+  gini = list(
+    label = "Gini coefficient", native_unit = "native Gini index", format = "number",
+    direction = "lower_is_better", change_kind = "index_points", poverty_line = FALSE,
+    engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Relative inequality index on its native scale."
+  ),
+  prosperity_gap = list(
+    label = "Prosperity gap", native_unit = "ratio", format = "number",
+    direction = "lower_is_better", change_kind = "absolute", poverty_line = TRUE,
+    engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Gap relative to the fixed threshold of 28; the selected poverty line is not used."
+  ),
+  avg_poverty = list(
+    label = "Average poverty", native_unit = "inverse outcome units", format = "number",
+    direction = "lower_is_better", change_kind = "absolute", poverty_line = FALSE,
+    engines = c("ols", "rif"), uncertainty = c("coefficient", "weather", "ensemble"),
+    caveat = "Mean inverse welfare over eligible positive-welfare rows only."
+  )
 )
 
 .metric_context_value <- function(so, field) {
@@ -163,7 +211,10 @@ metric_metadata <- function(method = "mean", so = NULL, pov_line = NULL,
   }
   if (identical(method, "prosperity_gap") &&
       (identical(selected_units, "LCU") || is.null(time_basis) || is.null(welfare_denominator))) {
-    missing_context <- c(missing_context, "fixed 28 threshold currency/welfare/time applicability unconfirmed; no currency conversion applied")
+    missing_context <- c(
+      missing_context,
+      "fixed 28 threshold currency/welfare/time applicability unconfirmed; no currency conversion applied"
+    )
   }
   if (uses_poverty_line &&
       (is.null(time_basis) || is.null(welfare_denominator))) {
@@ -339,7 +390,9 @@ filter_historically_supported_return_periods <- function(central, rp_map,
   hist <- hist & central$rp_name == expected_id
   n_years <- if ("n_obs" %in% names(central) && any(hist)) {
     suppressWarnings(max(as.numeric(central$n_obs[hist]), na.rm = TRUE))
-  } else NA_real_
+  } else {
+    NA_real_
+  }
   supported <- names(rp_map)[names(rp_map) == "Expected"]
   if (is.finite(n_years)) {
     supported <- c(supported, names(rp_map)[vapply(names(rp_map), function(label) {

@@ -353,8 +353,10 @@ mod_3_scenario_server <- function(id,
       poverty_line = s7$poverty_line,
       # Falls back to the outcome's own line when the Results metric is not a poverty one
       reach_poverty_line = reactive(
-        s7$poverty_line() %||%
-          { pl <- .sp_default_pov_line(selected_outcome()); if (is.na(pl)) NULL else pl }
+        s7$poverty_line() %||% {
+          pl <- .sp_default_pov_line(selected_outcome())
+          if (is.na(pl)) NULL else pl
+        }
       ),
       hist_label = s7$hist_label,
       analysis_unit = analysis_unit,

@@ -581,7 +581,9 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
   cost_frame <- as.data.frame(svy)[intersect(c("weight", "hhsize", "ppp2021"), names(svy))]
   cap <- suppressWarnings(as.numeric(spec$annual_cap %||% NA_real_))[1L]
   rule <- spec$budget_rule %||% "fixed"
-  reference <- if (is.null(hist_pipeline)) NULL else {
+  reference <- if (is.null(hist_pipeline)) {
+    NULL
+  } else {
     sp_shock_reference(hist_pipeline, nrow(svy), is_log)
   }
   # Impact trigger (P2-5): the metric of the historical pipeline becomes a
@@ -727,8 +729,9 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
 # The impact metric of one pipeline, one value per exposure table row (`NA` for
 # rows no prediction row refers to). Per (unit, simulation year), where the unit
 # is the whole sample, a survey location (interview months pooled) or an
-# administrative area (`gaul1_code`, `gaul2_code`): `loss` is minus the survey-weighted mean of level / reference - 1 in percent (rule 7: level
-# scale, no residual draws), `poverty_rate` the weighted percent of households
+# administrative area (`gaul1_code`, `gaul2_code`): `loss` is minus the survey-weighted mean of
+# level / reference - 1 in percent (rule 7: level scale, no residual draws),
+# `poverty_rate` the weighted percent of households
 # below the line, `poor_count` their summed weight. Poverty below national level is
 # `NA` below `SP_IMPACT_MIN_HH` sampled households. Sums are keyed by unit and
 # year, so the result does not depend on row order.

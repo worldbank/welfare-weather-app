@@ -435,7 +435,10 @@ mod_1_08_modelfit_server <- function(id,
                 ),
                 bslib::card(wise_chart_output(
                   ns("pred_welf_dist"),
-                  "Predicted versus actual welfare in the training data; calibration curve for binary outcomes, welfare distribution with quantile markers for RIF models",
+                  paste0(
+                    "Predicted versus actual welfare in the training data; calibration curve for binary outcomes, ",
+                    "welfare distribution with quantile markers for RIF models"
+                  ),
                   height = "400px"
                 ))
               )
@@ -488,7 +491,10 @@ mod_1_08_modelfit_server <- function(id,
             ),
             bslib::card(wise_chart_output(
               ns("residual_panels"),
-              "Diagnostic panels: residuals versus fitted values with a smooth trend, a normal quantile-quantile plot, and binned residual means for binary outcomes",
+              paste0(
+                "Diagnostic panels: residuals versus fitted values with a smooth trend, ",
+                "a normal quantile-quantile plot, and binned residual means for binary outcomes"
+              ),
               height = "400px"
             )),
             shiny::hr(),

@@ -1850,7 +1850,10 @@ mod_3_01_sp_server <- function(id,
             ""
           },
           if (!isTRUE(r$on_baseline)) {
-            "Before Step 2 runs, this preview covers every survey round; after the run it uses the baseline round used by the simulation."
+            paste0(
+              "Before Step 2 runs, this preview covers every survey round; ",
+              "after the run it uses the baseline round used by the simulation."
+            )
           } else {
             ""
           }

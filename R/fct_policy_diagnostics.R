@@ -135,7 +135,11 @@ policy_component_matrix <- function(baseline_svy, policy_svy,
     (!is.na(b) & !is.na(p) & b != p) | (is.na(b) != is.na(p))
   }
   sp_mask <- .policy_sp_mask(policy_svy)
-  other_mask <- if (length(non_sp_vars)) Reduce("|", lapply(non_sp_vars, changed_mask)) else rep(FALSE, nrow(policy_svy))
+  other_mask <- if (length(non_sp_vars)) {
+    Reduce("|", lapply(non_sp_vars, changed_mask))
+  } else {
+    rep(FALSE, nrow(policy_svy))
+  }
   rows <- list()
   add_row <- function(component, mask, cost = NA_real_) {
     rows[[length(rows) + 1L]] <<- data.frame(
@@ -149,7 +153,11 @@ policy_component_matrix <- function(baseline_svy, policy_svy,
   add_row(
     "Social protection", sp_mask,
     # A shock-responsive program reports its expected annual cost (`sp_cost`)
-    sp_cost %||% if (SP_TRANSFER_COL %in% names(policy_svy)) .sp_transfer_totals(policy_svy, analysis_unit, currency, admin_share)$total_cost else NA_real_
+    sp_cost %||% if (SP_TRANSFER_COL %in% names(policy_svy)) {
+      .sp_transfer_totals(policy_svy, analysis_unit, currency, admin_share)$total_cost
+    } else {
+      NA_real_
+    }
   )
   for (v in non_sp_vars) add_row(.policy_display_name(v), changed_mask(v))
   if (length(non_sp_vars) > 1L) add_row("Other policy levers (combined)", other_mask)

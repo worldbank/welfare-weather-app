@@ -27,7 +27,10 @@ mod_0_overview_ui <- function(id) {
           class = "hero-subtitle",
           "Weather Impact Simulation and Evaluation for Adaptation Policy and Planning"
         ),
-        p("WISE-APP is designed to stress-test household welfare under historical and projected climate scenarios, and to evaluate resilience-building policy interventions."),
+        p(paste0(
+          "WISE-APP is designed to stress-test household welfare under historical and projected climate ",
+          "scenarios, and to evaluate resilience-building policy interventions."
+        )),
         p("Work through the three steps below - each step builds on the previous one."),
         p(tags$a(
           icon("book-open"), "WISE-APP User Guide",
@@ -57,15 +60,26 @@ mod_0_overview_ui <- function(id) {
     width = 1 / 3, fill = FALSE,
     step_card(
       "1", "Model welfare",
-      "Estimate the empirical relationship between local weather and an outcome of interest - such as household consumption or poverty status - from survey microdata. The fitted model is the foundation for all subsequent steps."
+      paste0(
+        "Estimate the empirical relationship between local weather and an outcome of interest - such as ",
+        "household consumption or poverty status - from survey microdata. The fitted model is the foundation ",
+        "for all subsequent steps."
+      )
     ),
     step_card(
       "2", "Climate scenarios",
-      "Simulate the distribution of weather-driven welfare outcomes under historical conditions and for future climate projections (CMIP6 scenarios), by applying the model from Step 1."
+      paste0(
+        "Simulate the distribution of weather-driven welfare outcomes under historical conditions and for ",
+        "future climate projections (CMIP6 scenarios), by applying the model from Step 1."
+      )
     ),
     step_card(
       "3", "Policy scenarios",
-      "Re-simulate welfare under counterfactual policy scenarios (social protection, infrastructure, labor, education...) to quantify welfare gains and evaluate changes in climate resilience against the Step 2 baseline."
+      paste0(
+        "Re-simulate welfare under counterfactual policy scenarios (social protection, infrastructure, labor, ",
+        "education...) to quantify welfare gains and evaluate changes in climate resilience against the Step 2 ",
+        "baseline."
+      )
     )
   )
 
@@ -74,7 +88,11 @@ mod_0_overview_ui <- function(id) {
     bslib::card_header(icon("triangle-exclamation"), " Limitations"),
     bslib::card_body(
       p(
-        "WISE-APP is an illustrative stress-testing tool - not a forecast or a causal impact evaluation framework. Its estimates capture conditional statistical associations between local weather variability and household welfare. The User Guide includes",
+        paste0(
+          "WISE-APP is an illustrative stress-testing tool - not a forecast or a causal impact evaluation framework. ",
+          "Its estimates capture conditional statistical associations between local weather variability and household ",
+          "welfare. The User Guide includes"
+        ),
         tags$a(
           "important caveats.",
           href = "https://datanalytics.worldbank.org/wise-app-docs/#limitations",
@@ -182,7 +200,10 @@ mod_0_overview_server <- function(id) {
             textInput(ns("s3_key_id"), "Access key ID:", placeholder = "AKIA..."),
             passwordInput(ns("s3_secret"), "Secret access key:", placeholder = ""),
             helpText(
-              "Leave all fields blank to use the S3_* / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY environment configuration;",
+              paste0(
+                "Leave all fields blank to use the S3_* / AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY environment ",
+                "configuration;"
+              ),
               " values entered here are never combined with environment credentials.",
               style = "font-size: 12px;"
             )
@@ -301,9 +322,11 @@ mod_0_overview_server <- function(id) {
       metadata_generation <<- metadata_generation + 1L
       generation <- metadata_generation
       current <- function() !metadata_ended && identical(generation, metadata_generation)
-      callback <- function(fn) function(value) {
-        if (!current()) return(invisible(NULL))
-        shiny::withReactiveDomain(session, shiny::isolate(fn(value)))
+      callback <- function(fn) {
+        function(value) {
+          if (!current()) return(invisible(NULL))
+          shiny::withReactiveDomain(session, shiny::isolate(fn(value)))
+        }
       }
       .overview_metadata_load(params, callback(on_result), callback(on_error), current)
     }

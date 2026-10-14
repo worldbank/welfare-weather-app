@@ -410,10 +410,34 @@ mod_1_06_model_server <- function(id,
 
       # USER-DEFINED COVARIATES ----
       if (input$covariates == "User-defined") {
-        ind <- exclude_selected_vars(ind_vars(), outcome_name = selected_outcome()$name, weather_names = selected_weather()$name, interactions = input$interactions, fixedeffects = input$fixedeffects)
-        hh <- exclude_selected_vars(hh_vars(), outcome_name = selected_outcome()$name, weather_names = selected_weather()$name, interactions = input$interactions, fixedeffects = input$fixedeffects)
-        firm <- exclude_selected_vars(firm_vars(), outcome_name = selected_outcome()$name, weather_names = selected_weather()$name, interactions = input$interactions, fixedeffects = input$fixedeffects)
-        area <- exclude_selected_vars(area_vars(), outcome_name = selected_outcome()$name, weather_names = selected_weather()$name, interactions = input$interactions, fixedeffects = input$fixedeffects)
+        ind <- exclude_selected_vars(
+          ind_vars(),
+          outcome_name = selected_outcome()$name,
+          weather_names = selected_weather()$name,
+          interactions = input$interactions,
+          fixedeffects = input$fixedeffects
+        )
+        hh <- exclude_selected_vars(
+          hh_vars(),
+          outcome_name = selected_outcome()$name,
+          weather_names = selected_weather()$name,
+          interactions = input$interactions,
+          fixedeffects = input$fixedeffects
+        )
+        firm <- exclude_selected_vars(
+          firm_vars(),
+          outcome_name = selected_outcome()$name,
+          weather_names = selected_weather()$name,
+          interactions = input$interactions,
+          fixedeffects = input$fixedeffects
+        )
+        area <- exclude_selected_vars(
+          area_vars(),
+          outcome_name = selected_outcome()$name,
+          weather_names = selected_weather()$name,
+          interactions = input$interactions,
+          fixedeffects = input$fixedeffects
+        )
 
         # The covariate panel re-renders whenever outcome/weather/interaction/
         # fixed-effect choices change; restore each level's previous selection
@@ -814,27 +838,29 @@ mod_1_06_model_server <- function(id,
           input$model_type, alpha_val, lambda_choice, nfolds_val, standardize_val,
           use_mice_val, m_val, maxit_val, threshold_val
         ))
-        .memoise_last(lasso_cache, lasso_key, function() run_lasso_selection(
-          df = df,
-          selected_outcome = selected_outcome(),
-          weather_vars = weather_vars,
-          fe_vars = fe_vars,
-          int_vars = int_vars,
-          valid_vl = vl_for_lasso,
-          model_type = input$model_type,
-          alpha = alpha_val,
-          lambda_choice = lambda_choice,
-          nfolds = nfolds_val,
-          standardize = standardize_val,
-          mi_m = m_val,
-          mi_maxit = maxit_val,
-          mi_method = "norm",
-          use_mice = use_mice_val,
-          stability_threshold = threshold_val,
-          parallel_seed = 123L,
-          cv_selection = "random",
-          glmnet_tol = 1e-4
-        ))
+        .memoise_last(lasso_cache, lasso_key, function() {
+          run_lasso_selection(
+            df = df,
+            selected_outcome = selected_outcome(),
+            weather_vars = weather_vars,
+            fe_vars = fe_vars,
+            int_vars = int_vars,
+            valid_vl = vl_for_lasso,
+            model_type = input$model_type,
+            alpha = alpha_val,
+            lambda_choice = lambda_choice,
+            nfolds = nfolds_val,
+            standardize = standardize_val,
+            mi_m = m_val,
+            mi_maxit = maxit_val,
+            mi_method = "norm",
+            use_mice = use_mice_val,
+            stability_threshold = threshold_val,
+            parallel_seed = 123L,
+            cv_selection = "random",
+            glmnet_tol = 1e-4
+          )
+        })
       })
     }
 
@@ -892,7 +918,7 @@ mod_1_06_model_server <- function(id,
               type = "error",
               duration = 5
             )
-            return(NULL)
+            NULL
           }
         )
         lasso_store(result)

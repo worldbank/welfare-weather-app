@@ -146,7 +146,7 @@ bottom_code_welfare <- function(df, floor_value = 0.28) {
         welfare = ifelse(welfare < floor_value, floor_value, welfare)
       )
   } else {
-    return(df)
+    df
   }
 }
 
