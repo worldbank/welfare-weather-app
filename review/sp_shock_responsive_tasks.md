@@ -21,6 +21,7 @@ Phases 0, 1 and the Phase 2 build tasks P2-1 to P2-8 are built and committed on 
 | 7 | Share-of-loss budgets and the annual cap are built (P2-6); AAL sizing, poverty-linked budgets and the envelope per activation are P3-5. |
 | 9 | Cost-effectiveness uses one seeded targeting draw and the Results poverty line. |
 | 10 | Run-defining features (impact triggers on poverty) use the Step 2 line fixed per run and show "not available" without one; display metrics follow the Results line. |
+| 14 (14 Oct) | Plan rule 10 is restated: targeting-error and forecast draws are keyed by unit and simulation year and shared across members (common random numbers), not keyed by member. Revisit if Monte Carlo intervals or member-year tail statistics of these draws are reported, or if members run on different household sets. |
 | 13 (14 Oct) | Forecast skill is POD and FAR; a false alarm pays cash at full cost with no multiplier `m`; ex-post delay is weeks x percent lost per week, welfare only; breakeven `m` is on the transferred-value basis. |
 
 ## 2. Phase 2
@@ -33,9 +34,9 @@ Phases 0, 1 and the Phase 2 build tasks P2-1 to P2-8 are built and committed on 
 | P2-3 decomposition channel | ◐ | Not checked in a browser. Compact frames built before it read the new channels as 0. |
 | P2-4 binned triggers | ◐ | Not checked in a browser. Companion `<var>_cont` never reaches a model matrix (bit-identical predictions gate). |
 | P2-6 budgets | ◐ | Not checked in a browser. Not run through the harness: a loss-share or capped run; LCU cost weights in the cap (tested in PPP only). |
-| P2-8 layered targeting | ◐ | Not checked in a browser. Welfare-error draws are keyed by (survey row, year), shared by all members: a deviation from rule 10, accepted (the member name is missing in the decomposition consumer). Predicted welfare is an oracle, labelled. |
+| P2-8 layered targeting | ◐ | Not checked in a browser. Welfare-error draws are keyed by (survey row, year) and shared by all members on purpose (decision 14). Predicted welfare is an oracle, labelled. |
 | P2-5 impact triggers | ◐ | Not checked in a browser. No response check or record-length text for impact triggers. A threshold at the historical minimum never fires ("no adverse tail"). |
-| P2-7 anticipatory design | ◐ | Not checked in a browser. Forecast draws keyed by (cell, year), shared by all members (same deviation). Breakeven `m` is exact for mean welfare, approximate for poverty metrics. `m` is an assumption; the static model cannot show the mechanism. |
+| P2-7 anticipatory design | ◐ | Not checked in a browser. Forecast draws keyed by (cell, year), shared by all members (decision 14). Breakeven `m` is exact for mean welfare, approximate for poverty metrics. `m` is an assumption; the static model cannot show the mechanism. |
 
 BFA hot-path figures (P2-9 run, correction loop `policy_seconds`, ols, one SSP and one period, median of 3, uncertainty disabled / enabled; before = `7545ab3`, end of Phase 1; machine noise is about +-0.5 s, and a unit-test run overlapped the before run): `shock_sp` 8.2 / 8.2 s before, 7.8 / 7.8 s after (no regression; Phase 2 features are inactive at their defaults); `targeted_sp` 3.8 / 3.7 s before, 3.9 / 3.9 s after; with a Phase 2 feature on: `shock_sp_dyn` 9.0 / 8.9 s, `shock_sp_impact` 8.9 / 8.8 s, `shock_sp_antic` 9.5 / 9.5 s (+1.1 to +1.7 s, +15 to +20 % over `shock_sp`). Peak parent RSS 2.4 to 2.9 GB, not higher than before. `shock_sp` output fingerprints are identical across P2-8, P2-5 and P2-7. IRN has not been run for Phase 2.
 
@@ -55,7 +56,6 @@ Record in `review/REVIEW-2026-10-06-tracking.md`:
 
 ## 4. Open points
 
-- Draws shared across members (P2-8, P2-7): decide whether to thread the member name through the three consumers of the correction (`.policy_annual_channels`, the production adapter, the metric attribution) to restore rule 10.
 - The impact-level select is filtered by the survey columns; a restored config that asks for a missing level falls back to National silently.
 - Unit costs for non-cash levers (`mod_3_02` to `mod_3_05`) stay out of scope until the policy team supplies them.
 

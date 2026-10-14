@@ -1348,3 +1348,29 @@ test_that("every Phase 2 feature at its neutral setting leaves the Phase 1 run u
   expect_identical(shk_run(fx1)$shock$rows, shk_run(fx0)$shock$rows)
   expect_identical(shk_run(fx1)$hist_sim$pipeline$y_point, shk_run(fx0)$hist_sim$pipeline$y_point)
 })
+
+test_that("targeting-error and forecast draws are common random numbers across pipelines", {
+  fx <- shk_fixture("none", shk_timing_spec(transfer_timing = "anticipatory",
+    forecast_pod_pct = 50, forecast_far_pct = 50))
+  p <- fx$pipeline
+  tbl <- p$weather_exposure$table
+  g <- p$weather_exposure$row_index
+  timing <- shk_plan(fx, fx$spec, seed = 5L)$timing
+  # The forecast uniform depends on the cell and year only: with POD = FAR the
+  # outcome is the same whether or not the event happened
+  as_event <- .sp_forecast_fire(timing, tbl, g, p$sim_year, rep(TRUE, nrow(tbl)))
+  as_quiet <- .sp_forecast_fire(timing, tbl, g, p$sim_year, rep(FALSE, nrow(tbl)))
+  expect_identical(as_event, as_quiet)
+  expect_true(any(as_event[g]) && !all(as_event[g]))
+  # Another pipeline (other rows, order and years subset) sees the same luck
+  keep <- c(9L, 2L, 6L, 1L)
+  other <- .sp_forecast_fire(timing, tbl, g[keep], p$sim_year[keep], rep(TRUE, nrow(tbl)))
+  expect_identical(other[g[keep]], as_event[g[keep]])
+  # The same holds for the targeting-error uniforms: a household-year has one
+  # value in every pipeline that contains it
+  u_all <- .sp_dyn_uniform(5L, p$sim_year, p$svy_row_id, 12L)
+  u_part <- .sp_dyn_uniform(5L, p$sim_year[keep], p$svy_row_id[keep], 12L)
+  expect_identical(u_part, u_all[keep])
+  # ... and the draws do move with the seed
+  expect_false(identical(.sp_dyn_uniform(6L, p$sim_year, p$svy_row_id, 12L), u_all))
+})
