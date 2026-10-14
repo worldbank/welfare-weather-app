@@ -37,14 +37,11 @@ Phases 0, 1 and the Phase 2 build tasks P2-1 to P2-8 are built and committed on 
 | P2-5 impact triggers | ◐ | Not checked in a browser. No response check or record-length text for impact triggers. A threshold at the historical minimum never fires ("no adverse tail"). |
 | P2-7 anticipatory design | ◐ | Not checked in a browser. Forecast draws keyed by (cell, year), shared by all members (same deviation). Breakeven `m` is exact for mean welfare, approximate for poverty metrics. `m` is an assumption; the static model cannot show the mechanism. |
 
-BFA hot-path figures (correction loop, ols, one SSP and one period, median of 3, uncertainty disabled): `shock_sp` 7.5 to 8.0 s (Phase 1 baseline 7.0 s; `targeted_sp` 3.6 s); `shock_sp_dyn` 8.4 s; `shock_sp_impact` 8.2 s; `shock_sp_antic` 9.5 s. `shock_sp` output fingerprints are identical across P2-8, P2-5 and P2-7. IRN was never run for Phase 2.
+BFA hot-path figures (P2-9 run, correction loop `policy_seconds`, ols, one SSP and one period, median of 3, uncertainty disabled / enabled; before = `7545ab3`, end of Phase 1; machine noise is about +-0.5 s, and a unit-test run overlapped the before run): `shock_sp` 8.2 / 8.2 s before, 7.8 / 7.8 s after (no regression; Phase 2 features are inactive at their defaults); `targeted_sp` 3.8 / 3.7 s before, 3.9 / 3.9 s after; with a Phase 2 feature on: `shock_sp_dyn` 9.0 / 8.9 s, `shock_sp_impact` 8.9 / 8.8 s, `shock_sp_antic` 9.5 / 9.5 s (+1.1 to +1.7 s, +15 to +20 % over `shock_sp`). Peak parent RSS 2.4 to 2.9 GB, not higher than before. `shock_sp` output fingerprints are identical across P2-8, P2-5 and P2-7. IRN has not been run for Phase 2.
 
-### P2-9: Tests, benchmark and docs for Phase 2 (S to M) ☐
+### P2-9: Tests, benchmark and docs for Phase 2 ☑ (14 October 2026)
 
-- Extend the invariants list in the plan (never fires equals baseline, always fires equals the static program, monotone in threshold, amount, skill and share, preview equals run, determinism under row order) with the P2-1 to P2-8 cases; check each has a test.
-- Hot-path benchmark of the correction loop before Phase 2 (`7545ab3`) and now, BFA, plus IRN if the data allows, with the fixtures above; record the figures in the tracking file.
-- Update `AGENTS.md` (file entry for `fct_sp_shock.R` and `fct_sp_effectiveness.R`, pipeline text for dynamic scope, impact triggers and timing, seed argument), roxygen, and the plan's sections 1 to 3 (move built items out, keep rules).
-- Done when: the plan reads as "built" for Phase 2 with the remaining open points in section 4 below.
+Plan invariants extended and audited against the tests; two new tests (all Phase 2 features together; every feature at its neutral setting equals Phase 1); BFA before/after benchmark above; `AGENTS.md` and the plan updated. Remaining: IRN benchmark and the browser pass (section 3).
 
 ## 3. Owed by the user
 

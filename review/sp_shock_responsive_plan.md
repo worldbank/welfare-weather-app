@@ -2,7 +2,7 @@
 
 Scope: the Step 3 social protection (SP) module (`mod_3_01_sp`). Phase 0 (design options for the regular program) and Phase 1 (shock-responsive MVP) are built, verified and committed on `dev` (495ae85 to 7545ab3). This document keeps the design rules the code must follow and the plan for Phases 2 and 3. Work items are in `review/sp_shock_responsive_tasks.md`; what each finished task did is in the git history.
 
-Updated 2026-10-08. Written for the WISE-APP maintainers and the policy team who decide what to build next.
+Updated 2026-10-14 (Phase 2 built). Written for the WISE-APP maintainers and the policy team who decide what to build next.
 
 Evidence note: statements about the code come from reading the files cited. Literature claims are limited to what a search confirmed (Sources). Anything unverified is marked "to verify".
 
@@ -46,7 +46,17 @@ Code comments and tests cite Phase 1 decision numbers that no longer exist as a 
 
 ## 3. Phase 2: impact-based, anticipatory, richer targeting
 
-Rough effort 4 to 6 weeks, from reading the code, not prototyping. The largest uncertainty is the decomposition split.
+**Built (14 October 2026), tasks P2-1 to P2-8** (commit history: `git log --grep "P2-"`). The subsections below are the design record; where the build differs from them:
+
+- 3.1 impact triggers: metrics are national, GAUL admin 1/2 or survey location (months pooled); direction is always "above"; poverty below national level needs 30 sampled households per unit-year; a threshold at the historical minimum never fires. The metric is read from the pipeline's central predictions and is an exposure column.
+- 3.2 binned variables: option 1 (continuous companion `<var>_cont`) was built.
+- 3.4 budgets: a share of modelled loss and one annual cap on total cost (including administration), no separate per-cell ceiling.
+- 3.5 anticipatory: forecast skill is POD and FAR; a false alarm pays cash at full cost with no multiplier; the delay is weeks x percent lost per week; the breakeven `m` is on the transferred-value basis. Forecast draws are keyed by (cell, simulation year), shared by all members.
+- 3.7 layered targeting: geography is a worst-affected share of the triggered population ranked by depth beyond the trigger in historical standard deviations; predicted welfare is an oracle with seeded inclusion and exclusion errors, also keyed by (survey row, year) and shared by all members.
+
+Rule 10 (draws keyed by member) is therefore relaxed for the two draws above; reinstating it needs the member name in all three consumers of the correction.
+
+Rough effort was 4 to 6 weeks, from reading the code, not prototyping.
 
 **Build order (decided 8 October 2026):** P2-1 response check and P2-2 outputs with the cost-effectiveness tab (no hot-path change); P2-3 decomposition split while the numbers are stable; P2-4 binned triggers after a spike; P2-6 budgets; P2-5 impact-based triggers; P2-8 layered targeting; P2-7 anticipatory last (most assumptions). P2-9 closes the phase. P2-6 comes before P2-5 because share-of-loss budgets and the cap need only the household loss of rule 7, which Phase 1 already has; P2-5 is the larger, more uncertain task and should not block them.
 
@@ -129,6 +139,16 @@ Rough effort 3 to 4 weeks.
 ## Testing invariants (kept as tests; extend for each Phase 2 feature)
 
 Never triggers equals baseline; always triggers matches the static program (OLS exact, RIF within the documented approximation); monotonic in threshold and amount; preview parity; determinism under row order and chunk size; budget identities (total = net transfers + admin, envelopes never exceeded); a warming member fires a fixed historical heat trigger at least as often.
+
+Phase 2 additions, all in `test-sp-shock-correction.R` unless noted:
+
+- Every feature at its neutral setting (weather trigger, `dyn_geo = "all"`, welfare layer off, ex post with no delay, fixed budget, no cap) gives a plan with no `dyn`, `timing` or `impact` part and a run bit-identical to Phase 1 ("neutral setting" test).
+- Never fires and always fires hold for each impact metric; an always-on impact trigger pays what an always-on weather trigger pays.
+- Layers and skill only remove or add payments in the expected direction: a larger worst-affected share, a larger POD or FAR, and a lower exclusion error never reduce the paid set; a 100 % share, or every household added, equals Phase 1.
+- POD 100 %, FAR 0 % and `m` = 1 reproduce the ex-post run; `m` and the delay scale welfare only, never cost.
+- Draws (predicted-welfare errors, forecasts) are keyed by (survey row or cell, simulation year), so they do not depend on row order, chunk size or repeats, and they move with the seed.
+- Impact thresholds: a threshold equal to a cell's historical minimum never fires; rate and number of poor fire in the same years for a return-period trigger.
+- All Phase 2 features together ("Phase 2 features together" test): chunk size and repeat invariance, budget identity, cap never exceeded, preview equals run, attribution reconstructs the run.
 
 ## Sources
 

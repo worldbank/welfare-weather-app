@@ -1273,3 +1273,78 @@ test_that("spec checks cover the timing fields", {
   expect_match(.sp_shock_problem(utils::modifyList(an, list(timeliness_weeks = 60))), "weeks")
   expect_match(.sp_shock_problem(utils::modifyList(an, list(delay_loss_pct_per_week = 101))), "weeks")
 })
+
+# P2-9: Phase 2 features together ---------------------------------------------
+
+shk_phase2_spec <- function(...) {
+  shk_impact_spec("loss", "national", trigger_type = "return_period",
+    trigger_return_period_years = 2, trigger_value = NA_real_,
+    dyn_geo = "worst_share", dyn_geo_pct = 80, dyn_welfare = TRUE, dyn_welfare_pct = 70,
+    dyn_incl_error_pct = 20, dyn_excl_error_pct = 20,
+    transfer_timing = "anticipatory", forecast_pod_pct = 100, forecast_far_pct = 60,
+    effect_multiplier = 1.5, budget_rule = "loss_share", loss_share_pct = 60,
+    transfer_amount_usd = 0, admin_cost_pct = 10, ...)
+}
+
+test_that("the Phase 2 features together keep the run invariants", {
+  spec <- shk_phase2_spec()
+  expect_null(.sp_shock_problem(spec))
+  fx <- shk_fixture("none", spec)
+  p <- fx$pipeline
+  hist <- list(pipeline = p, so = shk_so("none"),
+    shared_context = list(train_aug = data.frame(id = 1:12, .resid = 0)), residuals = "none",
+    pov_line = 1.5)
+  run <- function(sp, chunk_size = 100000L) apply_policy_delta_to_baseline(
+    fx$base, fx$shock_policy, fx$model, shk_so("none"), hist, list(),
+    decomp_context = fx$ctx_shock, run_identity = "annual-run", chunk_size = chunk_size,
+    sp = sp, analysis_unit = "hh", seed = 5L
+  )
+  out <- run(spec)
+  rows <- out$shock$rows
+  expect_gt(sum(rows$total_cost), 0)
+  # Chunk size and repeats change nothing
+  small <- run(spec, 3L)
+  expect_identical(small$hist_sim$pipeline$y_point, out$hist_sim$pipeline$y_point)
+  expect_identical(small$shock$rows, rows)
+  expect_identical(run(spec)$shock$rows, rows)
+  # Budget identity: total = transfers + administration, administration is the share
+  expect_equal(rows$total_cost, rows$transfer_cost + rows$admin_cost)
+  expect_equal(rows$admin_cost, 0.1 * rows$total_cost)
+  # A cap is never exceeded, and a distant cap changes nothing
+  expect_identical(run(utils::modifyList(spec, list(annual_cap = 1e12)))$shock$rows[names(rows)],
+    transform(rows, cap_binds = FALSE)[names(rows)])
+  cap <- 0.5 * max(rows$total_cost)
+  capped <- run(utils::modifyList(spec, list(annual_cap = cap)))$shock$rows
+  expect_true(all(capped$total_cost <= cap * (1 + 1e-9)))
+  # Preview equals run for the historical arm
+  pre <- sp_shock_preview(spec, hist, fx$base, "hh", seed = 5L, exposure = p$weather_exposure)
+  hist_rows <- rows[rows$scenario == "Historical", ]
+  expect_equal(pre$annual$total_cost, hist_rows$total_cost)
+  expect_identical(pre$annual$activated, hist_rows$activated)
+  # The three consumers agree: attribution reconstructs the run
+  ch <- shk_channels(fx, out$annual_channels)
+  expect_equal(out$hist_sim$pipeline$y_point, p$y_point + ch$delta_total)
+  policy_hist <- hist
+  policy_hist$pipeline <- out$hist_sim$pipeline
+  res <- .policy_metric_decomposition(hist, policy_hist, list(), list(),
+    out$annual_channels, "mean", requested_residuals = "none")
+  expect_identical(res$status, "ok", info = res$reason)
+  expect_equal(res$annual$total, res$annual$policy - res$annual$baseline)
+})
+
+test_that("every Phase 2 feature at its neutral setting leaves the Phase 1 run unchanged", {
+  base <- shk_spec(trigger_value = 20)
+  neutral <- utils::modifyList(base, list(
+    trigger_metric = "weather", dyn_geo = "all", dyn_welfare = FALSE,
+    transfer_timing = "expost", forecast_pod_pct = 100, forecast_far_pct = 0,
+    effect_multiplier = 1, timeliness_weeks = 0, delay_loss_pct_per_week = 0,
+    budget_rule = "fixed", annual_cap = NA_real_
+  ))
+  fx0 <- shk_fixture("none", base)
+  fx1 <- shk_fixture("none", neutral)
+  expect_null(shk_plan(fx1, neutral)$dyn)
+  expect_null(shk_plan(fx1, neutral)$timing)
+  expect_null(shk_plan(fx1, neutral)$impact)
+  expect_identical(shk_run(fx1)$shock$rows, shk_run(fx0)$shock$rows)
+  expect_identical(shk_run(fx1)$hist_sim$pipeline$y_point, shk_run(fx0)$hist_sim$pipeline$y_point)
+})
