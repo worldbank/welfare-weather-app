@@ -214,9 +214,12 @@
   context <- prepared$context
   state <- sp_shock_pipeline_state(plan, pipeline, exposure)
   stored <- sp_shock_pipeline_transfer(plan, pipeline, exposure, state)
-  list(state = state, stored = stored, model = outcome_level_scale(
-    stored, context$so, .outcome_ppp(context$svy_baseline)[pipeline$svy_row_id]
-  ))
+  ppp <- .outcome_ppp(context$svy_baseline)[pipeline$svy_row_id]
+  nominal <- outcome_level_scale(stored, context$so, ppp)
+  # Welfare effectiveness of the payment (timing design, P2-7); cost and the
+  # reach figures keep the nominal amount
+  list(state = state, stored = stored, nominal = nominal,
+    model = if (is.null(state$effect)) nominal else nominal * state$effect)
 }
 
 # Internal hot loop: callers validate the immutable source and whole mapping
@@ -441,7 +444,7 @@
     # Run outputs of the shock program (P1-7), from the baseline predictions
     rows <- sp_shock_pipeline_rows(
       prepared$shock, pipeline, exposure, shock$state, shock$stored,
-      transfer_model = shock$model
+      transfer_model = shock$nominal
     )
     scenario_name <- scenario %||% "Scenario"
     member_name <- member %||% "Member"

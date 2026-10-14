@@ -1076,3 +1076,200 @@ test_that("the impact level choices follow the survey columns", {
   expect_identical(unname(.sp_impact_level_choices(svy["loc_id"])), c("national", "location"))
   expect_identical(unname(.sp_impact_level_choices(svy[0, ])), "national")
 })
+
+# P2-7: timing design -------------------------------------------------------
+
+shk_timing_spec <- function(...) {
+  utils::modifyList(shk_spec(trigger_value = 20), list(...))
+}
+
+shk_timing_state <- function(fx, spec = fx$spec, p = fx$pipeline) {
+  plan <- shk_plan(fx, spec, seed = 5L)
+  list(plan = plan, state = sp_shock_pipeline_state(plan, p, p$weather_exposure))
+}
+
+shk_timing_run <- function(fx, spec = fx$spec) {
+  p <- fx$pipeline
+  hist <- list(pipeline = p, so = shk_so(fx$transform),
+    shared_context = list(train_aug = data.frame(id = 1:12, .resid = 0)), residuals = "none")
+  apply_policy_delta_to_baseline(fx$base, fx$shock_policy, fx$model, shk_so(fx$transform), hist,
+    list(), decomp_context = fx$ctx_shock, run_identity = "annual-run", sp = spec,
+    analysis_unit = "hh", seed = 5L)
+}
+
+test_that("full skill with m = 1 reproduces the ex-post design exactly", {
+  fx <- shk_fixture("none", shk_timing_spec())
+  ex <- shk_timing_state(fx)
+  expect_null(ex$plan$timing)
+  spec <- utils::modifyList(fx$spec, list(transfer_timing = "anticipatory",
+    forecast_pod_pct = 100, forecast_far_pct = 0, effect_multiplier = 1))
+  an <- shk_timing_state(fx, spec)
+  expect_identical(an$state$exceeds, ex$state$exceeds)
+  expect_identical(an$state$in_scope, ex$state$in_scope)
+  expect_null(an$state$effect)
+  p <- fx$pipeline
+  expect_identical(
+    sp_shock_pipeline_transfer(an$plan, p, p$weather_exposure, an$state),
+    sp_shock_pipeline_transfer(ex$plan, p, p$weather_exposure, ex$state)
+  )
+  # The correction channels and the run rows agree too
+  run_ex <- shk_timing_run(fx)
+  run_an <- shk_timing_run(shk_fixture("none", spec), spec)
+  expect_identical(run_an$shock$rows[c("sim_year", "activated", "total_cost", "pop_tp", "pop_fp")],
+    run_ex$shock$rows[c("sim_year", "activated", "total_cost", "pop_tp", "pop_fp")])
+  expect_equal(run_an$shock$summary$breakeven_m, 1)
+  expect_equal(run_an$shock$summary$false_alarm_cost_share, 0)
+  expect_true(is.na(run_ex$shock$summary$breakeven_m))
+})
+
+test_that("the forecast fires events with POD and quiet cells with FAR, from keyed draws", {
+  fx <- shk_fixture("none", shk_timing_spec(transfer_timing = "anticipatory",
+    forecast_pod_pct = 60, forecast_far_pct = 30))
+  p <- fx$pipeline
+  tbl <- p$weather_exposure$table
+  obs <- tbl$temp >= 20
+  got <- shk_timing_state(fx)
+  cells <- sort(unique(.sp_cell_key(tbl)))
+  u <- numeric(nrow(tbl))
+  for (yr in unique(p$sim_year)) {
+    draw <- withr::with_seed(wise_seed(5L, "policy", "sp-forecast", as.character(yr)), stats::runif(length(cells)))
+    i <- p$sim_year == yr
+    u[i] <- draw[match(.sp_cell_key(tbl[i, ]), cells)]
+  }
+  expect_identical(got$state$exceeds, ifelse(obs, u < 0.6, u < 0.3))
+  expect_identical(got$state$hit, obs)
+  expect_true(any(got$state$exceeds != obs))
+  # Extremes
+  none <- shk_timing_state(fx, utils::modifyList(fx$spec, list(forecast_pod_pct = 0, forecast_far_pct = 0)))
+  expect_false(any(none$state$in_scope))
+  every <- shk_timing_state(fx, utils::modifyList(fx$spec, list(forecast_pod_pct = 100, forecast_far_pct = 100)))
+  expect_true(all(every$state$exceeds))
+  # More skill never pays less: both rates are monotone
+  paid <- function(pod, far) {
+    shk_timing_state(fx, utils::modifyList(fx$spec, list(forecast_pod_pct = pod, forecast_far_pct = far)))$state$in_scope
+  }
+  expect_true(all(paid(80, 30)[paid(40, 30)]))
+  expect_true(all(paid(60, 50)[paid(60, 10)]))
+})
+
+test_that("the forecast does not depend on prediction row order and repeats", {
+  fx <- shk_fixture("none", shk_timing_spec(transfer_timing = "anticipatory",
+    forecast_pod_pct = 60, forecast_far_pct = 30))
+  p <- fx$pipeline
+  ref <- shk_timing_state(fx)
+  perm <- c(7L, 2L, 10L, 5L, 1L, 9L, 3L, 8L, 6L, 4L)
+  q <- p
+  for (f in c("y_point", "svy_row_id", "sim_year", "weight", "id_vec")) q[[f]] <- p[[f]][perm]
+  q$weather_exposure$row_index <- p$weather_exposure$row_index[perm]
+  moved <- sp_shock_pipeline_state(ref$plan, q, q$weather_exposure)
+  expect_identical(moved$in_scope, ref$state$in_scope[perm])
+  expect_identical(shk_timing_state(fx)$state$in_scope, ref$state$in_scope)
+  other <- sp_shock_plan(fx$spec, p$weather_exposure$table, fx$shock_policy[[SP_ELIGIBLE_COL]],
+    fx$shock_policy, "hh", hist_pipeline = p, is_log = FALSE, seed = 6L)
+  expect_false(identical(
+    sp_shock_pipeline_state(other, p, p$weather_exposure)$exceeds, ref$state$exceeds
+  ))
+})
+
+test_that("m scales the welfare effect of hits only, never the cost", {
+  base <- shk_timing_spec(transfer_timing = "anticipatory", forecast_pod_pct = 70,
+    forecast_far_pct = 40, effect_multiplier = 1)
+  for (trans in c("none", "log")) {
+    fx1 <- shk_fixture(trans, base)
+    fx2 <- shk_fixture(trans, utils::modifyList(base, list(effect_multiplier = 2)))
+    ch <- function(fx) shk_channels(fx, .prepare_policy_annual_channels(
+      fx$ctx_shock, "annual-run", shock = shk_plan(fx, fx$spec, seed = 5L)))
+    c1 <- ch(fx1)
+    c2 <- ch(fx2)
+    st <- shk_timing_state(fx1)$state
+    paid <- st$in_scope & fx1$shock_policy[[SP_ELIGIBLE_COL]][fx1$pipeline$svy_row_id]
+    expect_true(any(paid & st$hit) && any(paid & !st$hit))
+    if (trans == "none") {
+      expect_equal(c2$delta_sp_shock[paid & st$hit], 2 * c1$delta_sp_shock[paid & st$hit])
+    } else {
+      expect_true(all(c2$delta_sp_shock[paid & st$hit] > c1$delta_sp_shock[paid & st$hit]))
+    }
+    expect_equal(c2$delta_sp_shock[paid & !st$hit], c1$delta_sp_shock[paid & !st$hit])
+    expect_equal(c2$delta_sp_shock[!paid], c1$delta_sp_shock[!paid])
+  }
+  r1 <- shk_timing_run(shk_fixture("none", base), base)$shock
+  spec2 <- utils::modifyList(base, list(effect_multiplier = 2))
+  r2 <- shk_timing_run(shk_fixture("none", spec2), spec2)$shock
+  expect_identical(r2$rows$total_cost, r1$rows$total_cost)
+  expect_identical(r2$rows$activated, r1$rows$activated)
+})
+
+test_that("ex-post delay scales welfare only and leaves cost unchanged", {
+  fx0 <- shk_fixture("none", shk_timing_spec())
+  c0 <- shk_channels(fx0, shk_prepared(fx0))
+  spec <- shk_timing_spec(timeliness_weeks = 4, delay_loss_pct_per_week = 10)
+  fx <- shk_fixture("none", spec)
+  cd <- shk_channels(fx, shk_prepared(fx))
+  expect_gt(sum(c0$delta_sp_shock), 0)
+  expect_equal(cd$delta_sp_shock, 0.6 * c0$delta_sp_shock)
+  expect_identical(shk_timing_run(fx, spec)$shock$rows$total_cost, shk_timing_run(fx0)$shock$rows$total_cost)
+  # A long delay removes the effect, never makes it negative
+  gone <- shk_timing_spec(timeliness_weeks = 20, delay_loss_pct_per_week = 10)
+  fxg <- shk_fixture("none", gone)
+  expect_true(all(shk_channels(fxg, shk_prepared(fxg))$delta_sp_shock == 0))
+  # Anticipatory payments ignore the delay inputs
+  an <- shk_timing_spec(transfer_timing = "anticipatory", timeliness_weeks = 4, delay_loss_pct_per_week = 10)
+  expect_identical(shk_timing_state(shk_fixture("none", an), an)$plan$timing$delay, 1)
+})
+
+test_that("the breakeven multiplier equates effective value with the ex-post design", {
+  spec <- shk_timing_spec(transfer_timing = "anticipatory", forecast_pod_pct = 50,
+    forecast_far_pct = 30, timeliness_weeks = 2, delay_loss_pct_per_week = 10)
+  fx <- shk_fixture("none", spec)
+  out <- shk_timing_run(fx, spec)$shock
+  r <- out$rows
+  expect_true(all(is.finite(c(r$hit_value, r$false_value, r$expost_value))))
+  be <- (sum(r$expost_value) - sum(r$false_value)) / sum(r$hit_value)
+  expect_equal(out$summary$breakeven_m, max(be, 0))
+  expect_equal(out$summary$false_alarm_cost_share,
+    sum(r$false_value) / (sum(r$hit_value) + sum(r$false_value)))
+  if (be > 0) expect_equal(be * sum(r$hit_value) + sum(r$false_value), sum(r$expost_value))
+  # The ex-post comparator is the same trigger with the delay: 0.8 x its value
+  ex <- shk_timing_run(shk_fixture("none", shk_timing_spec()), shk_timing_spec())$shock
+  nodelay <- utils::modifyList(spec, list(timeliness_weeks = 0))
+  r0 <- shk_timing_run(shk_fixture("none", nodelay), nodelay)$shock$rows
+  expect_equal(sum(r$expost_value), 0.8 * sum(r0$expost_value))
+  expect_gt(sum(r0$expost_value), 0)
+  # Display rows appear only for an anticipatory run
+  expect_true("Breakeven effectiveness multiplier m" %in% .sp_shock_display(out$summary)$Measure)
+  expect_false("Breakeven effectiveness multiplier m" %in% .sp_shock_display(ex$summary)$Measure)
+})
+
+test_that("preview equals run for an anticipatory design", {
+  spec <- shk_timing_spec(transfer_timing = "anticipatory", forecast_pod_pct = 60,
+    forecast_far_pct = 30, effect_multiplier = 1.5)
+  fx <- shk_fixture("none", spec)
+  p <- fx$pipeline
+  run <- shk_timing_run(fx, spec)$shock
+  pre <- sp_shock_preview(spec, list(pipeline = p, svy = fx$base, so = shk_so("none")),
+    fx$base, "hh", seed = 5L, exposure = p$weather_exposure)
+  hist_rows <- run$rows[run$rows$scenario == "Historical", ]
+  expect_equal(pre$annual$total_cost, hist_rows$total_cost)
+  expect_identical(pre$annual$activated, hist_rows$activated)
+  expect_equal(pre$breakeven_m, run$summary$breakeven_m)
+  expect_equal(pre$false_alarm_cost_share, run$summary$false_alarm_cost_share)
+})
+
+test_that("spec checks cover the timing fields", {
+  ok <- shk_timing_spec()
+  expect_null(.sp_shock_problem(ok))
+  expect_null(.sp_shock_problem(utils::modifyList(ok, list(transfer_timing = NA_character_))))
+  an <- utils::modifyList(ok, list(transfer_timing = "anticipatory", forecast_pod_pct = 80,
+    forecast_far_pct = 20, effect_multiplier = 1.2, timeliness_weeks = 4, delay_loss_pct_per_week = 5))
+  expect_null(.sp_shock_problem(an))
+  expect_match(.sp_shock_problem(utils::modifyList(an, list(transfer_timing = "x"))), "anticipatory")
+  for (bad in list(-1, 101)) {
+    expect_match(.sp_shock_problem(utils::modifyList(an, list(forecast_pod_pct = bad))), "between 0 and 100")
+    expect_match(.sp_shock_problem(utils::modifyList(an, list(forecast_far_pct = bad))), "between 0 and 100")
+  }
+  for (bad in list(0, -1, 11)) {
+    expect_match(.sp_shock_problem(utils::modifyList(an, list(effect_multiplier = bad))), "multiplier")
+  }
+  expect_match(.sp_shock_problem(utils::modifyList(an, list(timeliness_weeks = 60))), "weeks")
+  expect_match(.sp_shock_problem(utils::modifyList(an, list(delay_loss_pct_per_week = 101))), "weeks")
+})

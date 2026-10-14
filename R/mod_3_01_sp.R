@@ -508,6 +508,93 @@ mod_3_01_sp_server <- function(id,
                   min = 0, max = 50, value = 20, step = 5, post = "%"
                 )
               ),
+              pill_toggle(
+                inputId = ns("transfer_timing"),
+                label = "Payments are made",
+                aria_label = "Payment timing",
+                choices = c("After the shock (ex post)" = "expost", "On a forecast (anticipatory)" = "anticipatory"),
+                selected = "expost"
+              ),
+              conditionalPanel(
+                condition = paste0("input['", ns("transfer_timing"), "'] == 'anticipatory'"),
+                sliderInput(
+                  ns("forecast_pod_pct"),
+                  label = tags$span(
+                    "Forecast detection (POD, %)",
+                    info_popover(
+                      title = "Forecast skill",
+                      tags$p(
+                        "In a location-year where the weather really passes the trigger,",
+                        "the forecast fires with this probability. A missed event pays",
+                        "nobody. The draw is seeded by location and year."
+                      ),
+                      tags$p(
+                        "100 % detection, 0 % false alarms and a multiplier of 1 give",
+                        "exactly the ex-post design."
+                      )
+                    )
+                  ),
+                  min = 0, max = 100, value = 100, step = 5, post = "%"
+                ),
+                sliderInput(
+                  ns("forecast_far_pct"),
+                  label = tags$span(
+                    "False-alarm rate (%)",
+                    info_popover(
+                      title = "False alarms",
+                      tags$p(
+                        "Where the weather does not pass the trigger, the forecast still",
+                        "fires with this probability. A false alarm pays the full cost",
+                        "(transfers and administration) and the households receive the",
+                        "cash, but the multiplier below does not apply."
+                      )
+                    )
+                  ),
+                  min = 0, max = 100, value = 0, step = 5, post = "%"
+                ),
+                numericInput(
+                  ns("effect_multiplier"),
+                  label = tags$span(
+                    "Effectiveness multiplier m",
+                    info_popover(
+                      title = "Effectiveness multiplier",
+                      tags$p(
+                        "Scales the welfare effect of a payment made before an event that",
+                        "occurs (not its cost). It is an assumption: the model predicts",
+                        "annual welfare and cannot show the mechanism (avoided asset",
+                        "sales, scarring), so leave it at 1 unless you have evidence.",
+                        "Diagnostics shows the breakeven m at which the forecast design",
+                        "matches the ex-post design."
+                      )
+                    )
+                  ),
+                  value = 1, min = 0.1, max = 10, step = 0.1
+                )
+              ),
+              conditionalPanel(
+                condition = paste0("input['", ns("transfer_timing"), "'] != 'anticipatory'"),
+                numericInput(
+                  ns("timeliness_weeks"),
+                  label = tags$span(
+                    "Delivery delay (weeks)",
+                    info_popover(
+                      title = "Delivery delay",
+                      tags$p(
+                        "Weeks between the shock and the payment. With a loss of",
+                        "effectiveness per week below, the welfare effect is scaled by",
+                        "1 - weeks x loss per week (never below 0). The cost does not",
+                        "change. Both default to 0, which means no delay effect."
+                      )
+                    )
+                  ),
+                  value = 0, min = 0, max = 52, step = 1
+                ),
+                numericInput(
+                  ns("delay_loss_pct_per_week"),
+                  label = "Effectiveness lost per week of delay (%)",
+                  value = 0, min = 0, max = 100, step = 1
+                )
+              ),
               sliderInput(
                 ns("payments_per_activation"),
                 label = tags$span(
@@ -586,6 +673,9 @@ mod_3_01_sp_server <- function(id,
         },
         if (isTRUE(spec[["dyn_welfare"]])) {
           paste0("poorest ", spec$dyn_welfare_pct, "% by predicted welfare")
+        },
+        if (identical(spec[["transfer_timing"]], "anticipatory")) {
+          paste0("forecast POD ", spec$forecast_pod_pct, "%, false alarms ", spec$forecast_far_pct, "%")
         }
       )
       paste0(
@@ -1388,8 +1478,13 @@ mod_3_01_sp_server <- function(id,
           if (is_regular) {
             NA_integer_
           } else {
-            input$timeliness_weeks %||% 4L
-          }
+            input$timeliness_weeks %||% 0L
+          },
+        # Forecast skill, multiplier and delay loss (shock only, P2-7)
+        forecast_pod_pct = suppressWarnings(as.numeric(input$forecast_pod_pct %||% 100)),
+        forecast_far_pct = suppressWarnings(as.numeric(input$forecast_far_pct %||% 0)),
+        effect_multiplier = suppressWarnings(as.numeric(input$effect_multiplier %||% 1)),
+        delay_loss_pct_per_week = suppressWarnings(as.numeric(input$delay_loss_pct_per_week %||% 0))
       )
     })
 
@@ -1551,6 +1646,18 @@ mod_3_01_sp_server <- function(id,
               selection_card_row(
                 name = "Years the cap binds",
                 pills = fmt_num(100 * s$cap_exhaustion_share, suffix = "%", na = "Not available")
+              )
+            },
+            if (is.finite(s$breakeven_m %||% NA_real_)) {
+              selection_card_row(
+                name = "Payments before no event",
+                pills = fmt_num(100 * s$false_alarm_cost_share, suffix = "%", na = "Not available")
+              )
+            },
+            if (is.finite(s$breakeven_m %||% NA_real_)) {
+              selection_card_row(
+                name = "Breakeven effectiveness multiplier m",
+                pills = fmt_num(s$breakeven_m, digits = 2, na = "Not available")
               )
             },
             selection_card_row(

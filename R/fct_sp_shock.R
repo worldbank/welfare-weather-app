@@ -11,6 +11,7 @@ SP_TRIGGER_DIRECTIONS <- c("above", "below", "either")
 SP_PAYOUT_SCOPES <- c("local", "national_triggered", "national_all")
 SP_BUDGET_RULES <- c("fixed", "loss_share")
 SP_DYN_GEO <- c("all", "worst_share")
+SP_TIMINGS <- c("expost", "anticipatory")
 # What the trigger measures: a weather variable, or an impact computed from the
 # central predictions (P2-5). Impact metrics are read at national level or per
 # survey location (interview months pooled) and always fire on high values:
@@ -116,7 +117,39 @@ SP_IMPACT_MIN_HH <- 30L
   if (!is.na(cap) && (!is.finite(cap) || cap <= 0)) {
     return("The annual cap must be above 0, or left blank for no cap.")
   }
-  .sp_dyn_problem(sp, scope)
+  .sp_dyn_problem(sp, scope) %||% .sp_timing_problem(sp)
+}
+
+# Timing fields of a shock spec (P2-7). `transfer_timing` is "expost" (default,
+# also for a missing value) or "anticipatory"; the forecast skill (`forecast_pod_pct`,
+# `forecast_far_pct`) and the multiplier `effect_multiplier` belong to the
+# anticipatory design, the delay (`timeliness_weeks`, `delay_loss_pct_per_week`)
+# to the ex-post design. Absent fields take the neutral values.
+.sp_timing_problem <- function(sp) {
+  num <- function(x, default) {
+    v <- suppressWarnings(as.numeric(x %||% default))[1L]
+    if (is.na(v)) default else v
+  }
+  timing <- sp[["transfer_timing"]] %||% "expost"
+  if (is.na(timing)) timing <- "expost"
+  if (!timing %in% SP_TIMINGS) {
+    return("Choose ex post or anticipatory payments.")
+  }
+  pod <- num(sp[["forecast_pod_pct"]], 100)
+  far <- num(sp[["forecast_far_pct"]], 0)
+  if (!is.finite(pod) || pod < 0 || pod > 100 || !is.finite(far) || far < 0 || far > 100) {
+    return("Forecast detection and false-alarm rates must be between 0 and 100 percent.")
+  }
+  m <- num(sp[["effect_multiplier"]], 1)
+  if (!is.finite(m) || m <= 0 || m > 10) {
+    return("The effectiveness multiplier must be above 0 and at most 10.")
+  }
+  weeks <- num(sp[["timeliness_weeks"]], 0)
+  loss <- num(sp[["delay_loss_pct_per_week"]], 0)
+  if (!is.finite(weeks) || weeks < 0 || weeks > 52 || !is.finite(loss) || loss < 0 || loss > 100) {
+    return("The delay must be 0 to 52 weeks and the loss per week 0 to 100 percent.")
+  }
+  NULL
 }
 
 # Checks of the dynamic targeting layers (P2-8); NULL when valid or both off.
@@ -545,6 +578,8 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     impact = impact,
     # Layered dynamic targeting (P2-8); NULL leaves the Phase 1 payout scope
     dyn = .sp_dyn_plan(spec, hist_exposure, thresholds, reference, cost_frame, seed),
+    # Timing (P2-7); NULL for an ex-post design without delay
+    timing = .sp_timing_plan(spec, hist_exposure, seed),
     per_household = .sp_dynamic_per_household(eligibility, spec, svy, analysis_unit),
     # Run outputs (P1-7): cost arithmetic and the modelled-loss reference
     cost_frame = cost_frame,
@@ -701,6 +736,108 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
   first <- match(rows, g)
   out[rows] <- unname(metric[match(key[first], rownames(sums))])
   out
+}
+
+# Plan part of the timing design (P2-7); NULL when the design is ex post with no
+# delay, so the Phase 1 state is untouched.
+#
+# Anticipatory: the program pays on a forecast of the trigger. In a cell-year
+# where the realised weather passes the trigger (the event) the forecast fires
+# with probability `pod`; where it does not, with probability `far` (false
+# alarm). `m` multiplies the welfare effect of a payment made before an event
+# that occurs (a hit); a false alarm pays cash at m = 1; cost is never scaled.
+# Ex post: `delay` is the effectiveness left after `timeliness_weeks` of delay at
+# `delay_loss_pct_per_week` lost each week, applied to welfare only. The
+# forecast draw is keyed by (cell, simulation year) and shared by all members.
+.sp_timing_plan <- function(spec, hist_exposure, seed) {
+  num <- function(x, default) {
+    v <- suppressWarnings(as.numeric(x %||% default))[1L]
+    if (is.na(v)) default else v
+  }
+  timing <- spec[["transfer_timing"]] %||% "expost"
+  if (is.na(timing)) timing <- "expost"
+  anticipatory <- identical(timing, "anticipatory")
+  expost_delay <- max(
+    0, 1 - num(spec[["timeliness_weeks"]], 0) * num(spec[["delay_loss_pct_per_week"]], 0) / 100
+  )
+  if (!anticipatory && expost_delay == 1) {
+    return(NULL)
+  }
+  list(
+    anticipatory = anticipatory, pod = num(spec[["forecast_pod_pct"]], 100) / 100,
+    far = num(spec[["forecast_far_pct"]], 0) / 100,
+    m = if (anticipatory) num(spec[["effect_multiplier"]], 1) else 1,
+    # Effectiveness of the payments made, and of the ex-post comparator
+    delay = if (anticipatory) 1 else expost_delay, expost_delay = expost_delay,
+    seed = seed,
+    cells = if (anticipatory) sort(unique(.sp_cell_key(hist_exposure)))
+  )
+}
+
+# One string per exposure row naming its (survey round, location, interview
+# month) cell.
+.sp_cell_key <- function(tbl) {
+  keys <- intersect(.sp_trigger_key_cols, names(tbl))
+  do.call(paste, c(unname(lapply(as.data.frame(tbl)[keys], as.character)), list(sep = "\r")))
+}
+
+# Forecast of the trigger per exposure table row: `event` (realised trigger) is
+# fired with probability pod, a non-event with probability far. One uniform per
+# (cell, simulation year) from `wise_seed(seed, "policy", "sp-forecast", year)`;
+# rows no prediction row refers to stay FALSE. A cell that is not in the
+# historical table follows the realised trigger.
+.sp_forecast_fire <- function(timing, tbl, g, year, event) {
+  rows <- unique(g)
+  first <- match(rows, g)
+  cell <- match(.sp_cell_key(tbl[rows, , drop = FALSE]), timing$cells)
+  yr <- as.character(year[first])
+  u <- rep(NA_real_, length(rows))
+  for (idx in split(seq_along(rows), yr)) {
+    draw <- withr::with_seed(
+      wise_seed(timing$seed, "policy", "sp-forecast", yr[idx[1L]]),
+      stats::runif(length(timing$cells))
+    )
+    u[idx] <- draw[cell[idx]]
+  }
+  fire <- ifelse(event[rows], u < timing$pod, u < timing$far)
+  fire[is.na(u)] <- event[rows][is.na(u)]
+  out <- rep(FALSE, nrow(tbl))
+  out[rows] <- fire
+  out
+}
+
+# Welfare effectiveness of each prediction row's payment (P2-7): `m` on a hit of
+# an anticipatory design, the delay multiplier of an ex-post design, 1 else.
+# `NULL` when every multiplier is 1.
+.sp_timing_effect <- function(timing, hit) {
+  eff <- if (timing$anticipatory) {
+    ifelse(hit, timing$m, 1)
+  } else {
+    rep(timing$delay, length(hit))
+  }
+  if (all(eff == 1)) NULL else eff
+}
+
+# Weighted value of the payments of an anticipatory design by simulation year:
+# `hit_value` (the realised trigger passes in the payee's cell), `false_value`
+# (it does not) and `expost_value` (what the same trigger, scope, layers and
+# budget rule pay after the ex-post delay). Stored scale, weighted by the
+# prediction weights.
+.sp_timing_values <- function(plan, pipeline, exposure, state, transfer, years) {
+  w <- if (is.null(pipeline$weight)) rep(1, length(transfer)) else as.numeric(pipeline$weight)
+  w[!is.finite(w) | w < 0] <- 0
+  pay <- ifelse(is.finite(transfer), transfer, 0)
+  plan_ex <- plan
+  plan_ex$timing$anticipatory <- FALSE
+  plan_ex$timing$delay <- plan$timing$expost_delay
+  state_ex <- sp_shock_pipeline_state(plan_ex, pipeline, exposure)
+  pay_ex <- sp_shock_pipeline_transfer(plan_ex, pipeline, exposure, state_ex)
+  pay_ex <- ifelse(is.finite(pay_ex), pay_ex, 0) * plan$timing$expost_delay
+  by_year <- rowsum(cbind(
+    hit_value = w * pay * state$hit, false_value = w * pay * !state$hit,
+    expost_value = w * pay_ex
+  ), pipeline$sim_year)
+  by_year[match(as.character(years), rownames(by_year)), , drop = FALSE]
 }
 
 # Plan part of the layered dynamic targeting (P2-8): NULL when both layers are
@@ -988,12 +1125,22 @@ sp_shock_pipeline_state <- function(plan, pipeline, exposure) {
     tbl[[SP_IMPACT_COL]] <- .sp_impact_column(plan$impact, pipeline, exposure, plan$reference)
   }
   exceeds_t <- .sp_trigger_exceeds(tbl, plan$thresholds)
-  exceeds <- exceeds_t[exposure$row_index]
+  g <- exposure$row_index
+  hit <- exceeds_t[g]
+  # An anticipatory design pays on a forecast of the trigger (P2-7)
+  if (isTRUE(plan$timing$anticipatory)) {
+    exceeds_t <- .sp_forecast_fire(plan$timing, tbl, g, pipeline$sim_year, exceeds_t)
+  }
+  exceeds <- exceeds_t[g]
   state <- c(list(exceeds = exceeds), .sp_trigger_scope(
     exceeds, pipeline$sim_year, pipeline$weight, plan$spec
   )[c("in_scope", "share", "gate")])
   if (!is.null(plan$dyn)) {
     state$in_scope <- .sp_dyn_scope(plan, pipeline, exposure, tbl, exceeds_t, state$in_scope)
+  }
+  if (!is.null(plan$timing)) {
+    state$hit <- hit
+    state$effect <- .sp_timing_effect(plan$timing, hit)
   }
   state
 }
@@ -1032,6 +1179,14 @@ sp_shock_pipeline_rows <- function(plan, pipeline, exposure, state, transfer,
   # Modelled loss and payments in the same units and weights, for the share of
   # loss offset (P2-6)
   annual[c("loss_value", "paid_value")] <- NA_real_
+  # Anticipatory design (P2-7): value of payments before events that occur
+  # (hits) and before none (false alarms), and the value the same trigger pays
+  # ex post after the delay, in the same units and weights
+  annual[c("hit_value", "false_value", "expost_value")] <- NA_real_
+  if (isTRUE(plan$timing$anticipatory)) {
+    annual[c("hit_value", "false_value", "expost_value")] <-
+      .sp_timing_values(plan, pipeline, exposure, state, transfer, annual$sim_year)
+  }
   if (is.null(plan$reference)) {
     return(annual)
   }
@@ -1243,7 +1398,21 @@ sp_shock_summary <- function(rows) {
       leakage_share = ratio(sum(d$spend_no_event), sum(d$spend_total)),
       cost_cv = if (n >= 2L) ratio(stats::sd(d$total_cost), mean(d$total_cost)) else NA_real_,
       loss_offset_share = ratio(sum(d$paid_value %||% NA_real_), sum(d$loss_value %||% NA_real_)),
-      cap_exhaustion_share = if (is.null(d$cap_binds)) NA_real_ else mean(d$cap_binds)
+      cap_exhaustion_share = if (is.null(d$cap_binds)) NA_real_ else mean(d$cap_binds),
+      # Anticipatory design (P2-7): payments before no event over all payments,
+      # and the multiplier at which the effective value of the payments equals
+      # what the same trigger pays ex post (hits x m + false alarms = ex post),
+      # floored at 0 (false alarms alone already match it)
+      false_alarm_cost_share = ratio(
+        sum(d$false_value %||% NA_real_), sum(d$hit_value %||% NA_real_) + sum(d$false_value %||% NA_real_)
+      ),
+      breakeven_m = {
+        be <- ratio(
+          sum(d$expost_value %||% NA_real_) - sum(d$false_value %||% NA_real_),
+          sum(d$hit_value %||% NA_real_)
+        )
+        if (is.finite(be)) max(be, 0) else NA_real_
+      }
     )
   })
   do.call(rbind, c(unname(out), list(make.row.names = FALSE)))
@@ -1499,6 +1668,8 @@ sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
         cost_cv = basis$cost_cv,
         loss_offset_share = basis$loss_offset_share,
         cap_exhaustion_share = basis$cap_exhaustion_share,
+        false_alarm_cost_share = basis$false_alarm_cost_share,
+        breakeven_m = basis$breakeven_m,
         activation_freq = mean(annual$activated),
         mean_cost = mean(annual$total_cost),
         cost_1_in_20 = if (n_years >= 20L) {
@@ -1704,8 +1875,18 @@ sp_dynamic_effect <- function(y_t, transfer, is_log) {
     },
     "Modelled loss offset by payments" = function(s) pct(s$loss_offset_share %||% NA_real_),
     "Years the annual cap binds" = function(s) pct(s$cap_exhaustion_share %||% NA_real_),
+    "Payments before no event (false alarms)" = function(s) pct(s$false_alarm_cost_share %||% NA_real_),
+    "Breakeven effectiveness multiplier m" = function(s) {
+      fmt_num(s$breakeven_m %||% NA_real_, digits = 2, na = "Not available")
+    },
     "Member-years" = function(s) fmt_count(s$n_member_years)
   )
+  # The anticipatory rows only appear for an anticipatory run
+  if (!any(is.finite(c(summary$breakeven_m, summary$false_alarm_cost_share)))) {
+    measures <- measures[setdiff(names(measures), c(
+      "Payments before no event (false alarms)", "Breakeven effectiveness multiplier m"
+    ))]
+  }
   out <- data.frame(Measure = names(measures), stringsAsFactors = FALSE)
   for (i in seq_len(nrow(summary))) {
     out[[summary$scenario[[i]]]] <- vapply(

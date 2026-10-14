@@ -32,7 +32,13 @@
   sp_shock_impact <- utils::modifyList(sp_shock, list(
     trigger_metric = "loss", trigger_level = "national", trigger_variable = "x"
   ))
+  # The same shock program paid on a forecast with imperfect skill (P2-7)
+  sp_shock_antic <- utils::modifyList(sp_shock, list(
+    transfer_timing = "anticipatory", forecast_pod_pct = 70, forecast_far_pct = 20,
+    effect_multiplier = 1.5
+  ))
   fixtures <- list(
+    shock_sp_antic = list(sp = sp_shock_antic),
     shock_sp_impact = list(sp = sp_shock_impact),
     covariate = list(infra = infra),
     targeted_sp = list(sp = sp),
