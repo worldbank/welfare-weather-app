@@ -23,11 +23,22 @@
     trigger_direction = "above", trigger_return_period_years = 5,
     payout_scope = "local", national_k_pct = 0
   ))
+  # The same shock program with both layered targeting rules on (P2-8)
+  sp_shock_dyn <- utils::modifyList(sp_shock, list(
+    dyn_geo = "worst_share", dyn_geo_pct = 50, dyn_welfare = TRUE,
+    dyn_welfare_pct = 30, dyn_incl_error_pct = 20, dyn_excl_error_pct = 20
+  ))
+  # The same shock program on a national modelled-loss trigger (P2-5)
+  sp_shock_impact <- utils::modifyList(sp_shock, list(
+    trigger_metric = "loss", trigger_level = "national", trigger_variable = "x"
+  ))
   fixtures <- list(
+    shock_sp_impact = list(sp = sp_shock_impact),
     covariate = list(infra = infra),
     targeted_sp = list(sp = sp),
     combined = list(infra = infra, sp = sp),
-    shock_sp = list(sp = sp_shock)
+    shock_sp = list(sp = sp_shock),
+    shock_sp_dyn = list(sp = sp_shock_dyn)
   )
   unknown <- setdiff(labels, names(fixtures))
   if (length(unknown)) {
@@ -409,12 +420,14 @@
     # Build the shock plan before preparation, as apply_policy_delta_to_baseline()
     # does; the preparation then carries the plan into the correction loop.
     shock_plan <- if (is_shock) {
+      hist_exposure <- step2_exposure_resolve(hist_sim$pipeline, hist_sim)
       sp_shock_plan(
         policy_fixture$sp,
-        step2_exposure_resolve(hist_sim$pipeline, hist_sim)$table,
+        hist_exposure$table,
         svy_policy[[SP_ELIGIBLE_COL]], svy_policy, config$unit,
         hist_pipeline = hist_sim$pipeline,
-        is_log = identical(so$transform %||% "", "log")
+        is_log = identical(so$transform %||% "", "log"),
+        hist_exposure_map = hist_exposure, pov_line = hist_sim$pov_line
       )
     }
     t0 <- proc.time()[["elapsed"]]

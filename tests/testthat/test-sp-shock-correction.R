@@ -701,3 +701,378 @@ test_that("spec checks cover the budget rule, share and cap", {
   expect_true(has_sp_change(utils::modifyList(ls, list(transfer_amount_usd = 0))))
   expect_false(has_sp_change(utils::modifyList(ok, list(transfer_amount_usd = 0))))
 })
+
+# P2-8: layered dynamic targeting ------------------------------------------
+
+shk_dyn_state <- function(fx, spec, p = fx$pipeline, seed = 5L) {
+  plan <- sp_shock_plan(spec, fx$pipeline$weather_exposure$table,
+    fx$shock_policy[[SP_ELIGIBLE_COL]], fx$shock_policy, "hh",
+    hist_pipeline = fx$pipeline, is_log = FALSE, seed = seed)
+  list(plan = plan, state = sp_shock_pipeline_state(plan, p, p$weather_exposure))
+}
+
+shk_dyn_spec <- function(...) shk_spec(trigger_value = 20, dyn_geo_pct = 100, ...)
+
+test_that("with both layers off the plan has no layer and the scope is Phase 1", {
+  fx <- shk_fixture("none", shk_dyn_spec())
+  off <- shk_dyn_state(fx, fx$spec)
+  expect_null(off$plan$dyn)
+  expect_identical(off$state$in_scope, off$state$exceeds)
+  # Layers that cannot remove anyone (a 100 % share, every household added) leave
+  # the scope bit-identical
+  all_geo <- shk_dyn_state(fx, utils::modifyList(fx$spec, list(dyn_geo = "worst_share")))
+  expect_identical(all_geo$state$in_scope, off$state$in_scope)
+  wide <- shk_dyn_state(fx, utils::modifyList(fx$spec, list(
+    dyn_welfare = TRUE, dyn_welfare_pct = 50, dyn_incl_error_pct = 100, dyn_excl_error_pct = 0
+  )))
+  expect_identical(wide$state$in_scope, off$state$in_scope)
+})
+
+test_that("the worst-affected share ranks cells by depth in historical sd units", {
+  fx <- shk_fixture("none", shk_dyn_spec(dyn_geo = "worst_share"))
+  p <- fx$pipeline
+  tbl <- p$weather_exposure$table
+  base_in <- shk_dyn_state(fx, shk_dyn_spec())$state$in_scope
+  cell <- paste(tbl$loc_id, tbl$int_month)
+  sd_cell <- tapply(tbl$temp, cell, stats::sd)[cell]
+  sev <- (tbl$temp - 20) / sd_cell
+  pop <- p$weight
+  for (share in c(10, 40, 70, 100)) {
+    spec <- utils::modifyList(fx$spec, list(dyn_geo_pct = share))
+    got <- shk_dyn_state(fx, spec)$state$in_scope
+    expected <- rep(FALSE, length(pop))
+    for (yr in unique(p$sim_year)) {
+      i <- which(base_in & p$sim_year == yr)
+      i <- i[order(-sev[i], i)]
+      before <- cumsum(pop[i]) - pop[i]
+      expected[i] <- before < share / 100 * sum(pop[i])
+    }
+    expect_identical(got, expected, info = share)
+  }
+  # Monotone in the share, and a tiny share still pays the worst cell of a year
+  small <- shk_dyn_state(fx, utils::modifyList(fx$spec, list(dyn_geo_pct = 1)))$state$in_scope
+  big <- shk_dyn_state(fx, utils::modifyList(fx$spec, list(dyn_geo_pct = 60)))$state$in_scope
+  expect_true(all(big[small]))
+  expect_equal(sum(small[p$sim_year == 2031]), 1L)
+})
+
+test_that("the layered scope does not depend on prediction row order", {
+  fx <- shk_fixture("none", shk_dyn_spec(
+    dyn_geo = "worst_share", dyn_geo_pct = 50, dyn_welfare = TRUE,
+    dyn_welfare_pct = 60, dyn_incl_error_pct = 30, dyn_excl_error_pct = 30
+  ))
+  p <- fx$pipeline
+  ref <- shk_dyn_state(fx, fx$spec)
+  expect_true(any(ref$state$in_scope) && !all(ref$state$in_scope))
+  perm <- c(7L, 2L, 10L, 5L, 1L, 9L, 3L, 8L, 6L, 4L)
+  q <- p
+  for (f in c("y_point", "svy_row_id", "sim_year", "weight", "id_vec")) q[[f]] <- p[[f]][perm]
+  q$weather_exposure$row_index <- p$weather_exposure$row_index[perm]
+  moved <- sp_shock_pipeline_state(ref$plan, q, q$weather_exposure)
+  expect_identical(moved$in_scope, ref$state$in_scope[perm])
+  # Same inputs, same seed: identical; another seed moves the draws
+  expect_identical(shk_dyn_state(fx, fx$spec)$state$in_scope, ref$state$in_scope)
+  u1 <- .sp_dyn_uniform(5L, p$sim_year, p$svy_row_id, 12L)
+  u2 <- .sp_dyn_uniform(6L, p$sim_year, p$svy_row_id, 12L)
+  expect_false(identical(u1, u2))
+  expect_identical(.sp_dyn_uniform(5L, q$sim_year, q$svy_row_id, 12L), u1[perm])
+})
+
+test_that("predicted-welfare targeting selects below the cutoff, with errors", {
+  spec <- shk_dyn_spec(dyn_welfare = TRUE, dyn_welfare_pct = 50,
+    dyn_incl_error_pct = 0, dyn_excl_error_pct = 0)
+  fx <- shk_fixture("none", spec)
+  p <- fx$pipeline
+  base_in <- shk_dyn_state(fx, shk_dyn_spec())$state$in_scope
+  got <- shk_dyn_state(fx, fx$spec)
+  ref <- tapply(p$y_point, p$svy_row_id, mean)
+  cut <- .sp_welfare_quantile(
+    as.numeric(ref[as.character(seq_len(12))]), fx$base$weight, 0.5
+  )
+  expect_equal(got$plan$dyn$welfare_cut, cut)
+  expect_identical(got$state$in_scope, base_in & p$y_point <= cut)
+  expect_true(any(base_in & !(p$y_point <= cut)))
+  # Everyone wrongly excluded, nobody wrongly included
+  none <- shk_dyn_state(fx, utils::modifyList(fx$spec, list(dyn_excl_error_pct = 100)))
+  expect_identical(none$state$in_scope, base_in & p$y_point > cut & FALSE)
+  # Everyone wrongly included on top of the correct ones
+  all_in <- shk_dyn_state(fx, utils::modifyList(fx$spec, list(
+    dyn_incl_error_pct = 100)))
+  expect_identical(all_in$state$in_scope, base_in)
+  # More exclusion error never adds payments
+  few <- shk_dyn_state(fx, utils::modifyList(fx$spec, list(dyn_excl_error_pct = 40)))
+  expect_true(all(got$state$in_scope[few$state$in_scope]))
+})
+
+test_that("layers reduce cost, and preview equals run", {
+  base_spec <- shk_dyn_spec()
+  fx0 <- shk_fixture("none", base_spec)
+  spec <- utils::modifyList(base_spec, list(
+    dyn_geo = "worst_share", dyn_geo_pct = 50, dyn_welfare = TRUE,
+    dyn_welfare_pct = 60, dyn_incl_error_pct = 20, dyn_excl_error_pct = 20
+  ))
+  fx <- shk_fixture("none", spec)
+  p <- fx$pipeline
+  hist <- list(pipeline = p, so = shk_so("none"),
+    shared_context = list(train_aug = data.frame(id = 1:12, .resid = 0)), residuals = "none")
+  run <- apply_policy_delta_to_baseline(
+    fx$base, fx$shock_policy, fx$model, shk_so("none"), hist, list(),
+    decomp_context = fx$ctx_shock, run_identity = "annual-run",
+    sp = spec, analysis_unit = "hh", seed = 5L
+  )$shock
+  open <- shk_run(fx0)$shock
+  expect_lte(sum(run$rows$total_cost), sum(open$rows$total_cost))
+  expect_lt(sum(run$rows$total_cost), sum(open$rows$total_cost))
+  pre <- sp_shock_preview(spec, list(pipeline = p, svy = fx$base, so = shk_so("none")),
+    fx$base, "hh", seed = 5L, exposure = p$weather_exposure)
+  hist_rows <- run$rows[run$rows$scenario == "Historical", ]
+  expect_equal(pre$annual$total_cost, hist_rows$total_cost)
+  expect_identical(pre$annual$activated, hist_rows$activated)
+  # The run is repeatable
+  again <- apply_policy_delta_to_baseline(
+    fx$base, fx$shock_policy, fx$model, shk_so("none"), hist, list(),
+    decomp_context = fx$ctx_shock, run_identity = "annual-run",
+    sp = spec, analysis_unit = "hh", seed = 5L
+  )$shock
+  expect_identical(again$rows, run$rows)
+})
+
+test_that("spec checks cover the dynamic layers", {
+  ok <- shk_dyn_spec()
+  expect_null(.sp_shock_problem(ok))
+  geo <- utils::modifyList(ok, list(dyn_geo = "worst_share"))
+  expect_null(.sp_shock_problem(geo))
+  expect_match(.sp_shock_problem(utils::modifyList(ok, list(dyn_geo = "x"))), "within")
+  for (bad in list(NA_real_, 0, -1, 101)) {
+    expect_match(.sp_shock_problem(utils::modifyList(geo, list(dyn_geo_pct = bad))), "worst-affected")
+  }
+  expect_match(.sp_shock_problem(utils::modifyList(geo, list(
+    payout_scope = "national_all", national_k_pct = 20))), "worst-affected")
+  wel <- utils::modifyList(ok, list(dyn_welfare = TRUE, dyn_welfare_pct = 30,
+    dyn_incl_error_pct = 10, dyn_excl_error_pct = 10))
+  expect_null(.sp_shock_problem(wel))
+  for (bad in list(NA_real_, 0, 100)) {
+    expect_match(.sp_shock_problem(utils::modifyList(wel, list(dyn_welfare_pct = bad))), "cutoff")
+  }
+  expect_match(.sp_shock_problem(utils::modifyList(wel, list(dyn_excl_error_pct = 120))), "error rates")
+  # Without the layer the welfare fields are not read
+  expect_null(.sp_shock_problem(utils::modifyList(ok, list(dyn_welfare = FALSE, dyn_welfare_pct = NA))))
+})
+
+# P2-5: impact-based triggers ----------------------------------------------
+
+shk_impact_spec <- function(metric = "loss", level = "national", ...) {
+  utils::modifyList(
+    shk_spec(trigger_metric = metric, trigger_level = level, trigger_variable = NA_character_,
+      trigger_direction = "above", trigger_value = 0),
+    list(...)
+  )
+}
+
+shk_impact_plan <- function(fx, spec, pov_line = 1.5) {
+  sp_shock_plan(spec, fx$pipeline$weather_exposure$table,
+    fx$shock_policy[[SP_ELIGIBLE_COL]], fx$shock_policy, "hh",
+    hist_pipeline = fx$pipeline, is_log = FALSE, seed = 5L,
+    hist_exposure_map = fx$pipeline$weather_exposure, pov_line = pov_line)
+}
+
+shk_impact_cfg <- function(metric, level = "national", pov_line = 1.5) {
+  list(metric = metric, level = level, pov_line = pov_line, is_log = FALSE)
+}
+
+test_that("impact metrics match a hand calculation (national)", {
+  fx <- shk_fixture("none", shk_impact_spec())
+  p <- fx$pipeline
+  ref <- tapply(p$y_point, p$svy_row_id, mean)[as.character(p$svy_row_id)]
+  ref_full <- rep(NA_real_, 12)
+  ref_full[as.integer(names(tapply(p$y_point, p$svy_row_id, mean)))] <- tapply(p$y_point, p$svy_row_id, mean)
+  w <- p$weight
+  for (yr in unique(p$sim_year)) {
+    i <- p$sim_year == yr
+    exp_loss <- -100 * sum(w[i] * (p$y_point[i] / ref[i] - 1)) / sum(w[i])
+    exp_pov <- 100 * sum(w[i] * (p$y_point[i] < 1.5)) / sum(w[i])
+    exp_cnt <- sum(w[i] * (p$y_point[i] < 1.5))
+    cell <- p$weather_exposure$row_index[i]
+    col <- function(m) .sp_impact_column(shk_impact_cfg(m), p, p$weather_exposure, ref_full)
+    expect_equal(unique(col("loss")[cell]), exp_loss, info = yr)
+    expect_equal(unique(col("poverty_rate")[cell]), exp_pov, info = yr)
+    expect_equal(unique(col("poor_count")[cell]), exp_cnt, info = yr)
+  }
+  # Table rows no prediction row refers to stay missing
+  q <- p
+  q$weather_exposure$table <- rbind(p$weather_exposure$table, p$weather_exposure$table[1, ])
+  expect_true(is.na(.sp_impact_column(shk_impact_cfg("loss"), q, q$weather_exposure, ref_full)[11]))
+})
+
+test_that("location-level loss is per survey location, poverty needs enough households", {
+  fx <- shk_fixture("none", shk_impact_spec(level = "location"))
+  p <- fx$pipeline
+  tbl <- p$weather_exposure$table
+  ref_full <- rep(NA_real_, 12)
+  m <- tapply(p$y_point, p$svy_row_id, mean)
+  ref_full[as.integer(names(m))] <- m
+  col <- .sp_impact_column(shk_impact_cfg("loss", "location"), p, p$weather_exposure, ref_full)
+  loc <- paste(tbl$code, tbl$year, tbl$survname, tbl$loc_id)
+  for (u in unique(loc)) for (yr in unique(p$sim_year)) {
+    i <- loc == u & p$sim_year == yr
+    expect_equal(unique(col[i]), -100 * sum(p$weight[i] * (p$y_point[i] / ref_full[p$svy_row_id[i]] - 1)) / sum(p$weight[i]))
+  }
+  pov <- .sp_impact_column(shk_impact_cfg("poverty_rate", "location"), p, p$weather_exposure, ref_full)
+  expect_true(all(is.na(pov)))
+  expect_error(shk_impact_plan(fx, shk_impact_spec("poverty_rate", "location")),
+    "sampled households", class = "sp_trigger_problem")
+})
+
+test_that("a poverty trigger is not available without the Step 2 line", {
+  fx <- shk_fixture("none", shk_impact_spec("poverty_rate"))
+  expect_error(shk_impact_plan(fx, fx$spec, pov_line = NULL), "poverty line", class = "sp_trigger_problem")
+  expect_error(shk_impact_plan(fx, fx$spec, pov_line = NA), "poverty line", class = "sp_trigger_problem")
+  expect_equal(shk_impact_plan(fx, shk_impact_spec("loss"), pov_line = NULL)$impact$metric, "loss")
+})
+
+test_that("never-fires and always-fires hold for every metric", {
+  for (metric in c("loss", "poverty_rate", "poor_count")) {
+    fx <- shk_fixture("none", shk_impact_spec(metric, trigger_value = 1e12))
+    p <- fx$pipeline
+    never <- shk_impact_plan(fx, fx$spec)
+    st <- sp_shock_pipeline_state(never, p, p$weather_exposure)
+    expect_false(any(st$in_scope), info = metric)
+    expect_true(all(sp_shock_pipeline_transfer(never, p, p$weather_exposure, st) == 0), info = metric)
+    always <- shk_impact_plan(fx, utils::modifyList(fx$spec, list(trigger_value = -1e12)))
+    st <- sp_shock_pipeline_state(always, p, p$weather_exposure)
+    expect_true(all(st$in_scope), info = metric)
+    # An always-on impact trigger pays what an always-on weather trigger pays
+    fw <- shk_fixture("none", shk_spec(trigger_value = -1e9))
+    pw <- fw$pipeline
+    w_plan <- sp_shock_plan(fw$spec, pw$weather_exposure$table, fw$shock_policy[[SP_ELIGIBLE_COL]],
+      fw$shock_policy, "hh")
+    expect_equal(
+      sp_shock_pipeline_transfer(always, p, p$weather_exposure, st),
+      sp_shock_pipeline_transfer(w_plan, pw, pw$weather_exposure), info = metric
+    )
+  }
+})
+
+test_that("a 1-in-2 trigger on national loss fires in the worse year; rate and count agree", {
+  fx <- shk_fixture("none", shk_impact_spec(trigger_type = "return_period",
+    trigger_return_period_years = 2, trigger_value = NA_real_))
+  p <- fx$pipeline
+  col <- .sp_impact_column(shk_impact_cfg("loss"), p, p$weather_exposure, {
+    r <- rep(NA_real_, 12); m <- tapply(p$y_point, p$svy_row_id, mean); r[as.integer(names(m))] <- m; r
+  })
+  by_year <- tapply(col[p$weather_exposure$row_index], p$sim_year, unique)
+  worse <- names(which.max(by_year))
+  plan <- shk_impact_plan(fx, fx$spec)
+  expect_identical(plan$impact$n_years, 2L)
+  st <- sp_shock_pipeline_state(plan, p, p$weather_exposure)
+  expect_identical(st$exceeds, as.character(p$sim_year) == worse)
+  rate <- shk_impact_plan(fx, utils::modifyList(fx$spec, list(trigger_metric = "poverty_rate")))
+  count <- shk_impact_plan(fx, utils::modifyList(fx$spec, list(trigger_metric = "poor_count")))
+  expect_identical(
+    sp_shock_pipeline_state(rate, p, p$weather_exposure)$exceeds,
+    sp_shock_pipeline_state(count, p, p$weather_exposure)$exceeds
+  )
+})
+
+test_that("the impact column does not depend on prediction row order", {
+  fx <- shk_fixture("none", shk_impact_spec(trigger_value = 0, dyn_geo_pct = 100))
+  p <- fx$pipeline
+  plan <- shk_impact_plan(fx, fx$spec)
+  ref <- sp_shock_pipeline_state(plan, p, p$weather_exposure)
+  perm <- c(7L, 2L, 10L, 5L, 1L, 9L, 3L, 8L, 6L, 4L)
+  q <- p
+  for (f in c("y_point", "svy_row_id", "sim_year", "weight", "id_vec")) q[[f]] <- p[[f]][perm]
+  q$weather_exposure$row_index <- p$weather_exposure$row_index[perm]
+  expect_identical(sp_shock_pipeline_state(plan, q, q$weather_exposure)$in_scope, ref$in_scope[perm])
+  expect_identical(sp_shock_pipeline_state(plan, p, p$weather_exposure)$in_scope, ref$in_scope)
+})
+
+test_that("preview equals run for an impact trigger", {
+  spec <- shk_impact_spec("loss", trigger_type = "return_period",
+    trigger_return_period_years = 2, trigger_value = NA_real_)
+  fx <- shk_fixture("none", spec)
+  p <- fx$pipeline
+  hist <- list(pipeline = p, so = shk_so("none"),
+    shared_context = list(train_aug = data.frame(id = 1:12, .resid = 0)), residuals = "none",
+    pov_line = 1.5)
+  run <- apply_policy_delta_to_baseline(fx$base, fx$shock_policy, fx$model, shk_so("none"),
+    hist, list(), decomp_context = fx$ctx_shock, run_identity = "annual-run",
+    sp = spec, analysis_unit = "hh", seed = 5L)$shock
+  expect_gt(sum(run$rows$activated), 0)
+  expect_lt(sum(run$rows$activated), nrow(run$rows))
+  pre <- sp_shock_preview(spec, hist, fx$base, "hh", seed = 5L, exposure = p$weather_exposure)
+  hist_rows <- run$rows[run$rows$scenario == "Historical", ]
+  expect_equal(pre$annual$total_cost, hist_rows$total_cost)
+  expect_identical(pre$annual$activated, hist_rows$activated)
+  expect_identical(pre$n_record_years, 2L)
+  # A poverty trigger without the line returns a message, not an error
+  no_line <- sp_shock_preview(utils::modifyList(spec, list(trigger_metric = "poverty_rate")),
+    utils::modifyList(hist, list(pov_line = NULL)), fx$base, "hh", seed = 5L,
+    exposure = p$weather_exposure)
+  expect_match(no_line$problem, "poverty line")
+})
+
+test_that("spec checks cover the impact metric and level", {
+  ok <- shk_impact_spec()
+  expect_null(.sp_shock_problem(ok))
+  expect_null(.sp_shock_problem(utils::modifyList(ok, list(trigger_variable = NA_character_, trigger_direction = "either"))))
+  expect_match(.sp_shock_problem(utils::modifyList(ok, list(trigger_metric = "x"))), "measures")
+  expect_match(.sp_shock_problem(utils::modifyList(ok, list(trigger_level = "x"))), "nationally")
+  expect_match(.sp_shock_problem(utils::modifyList(ok, list(trigger_value = NA_real_))), "threshold")
+  # The weather trigger still needs its variable
+  expect_match(.sp_shock_problem(shk_spec(trigger_variable = NA_character_)), "weather variable")
+  expect_true(has_sp_change(ok))
+})
+
+test_that("administrative levels read the survey area codes and need them in the data", {
+  fx <- shk_fixture("none", shk_impact_spec(level = "admin1"))
+  area <- rep(c("A", "B", "A"), 4)
+  fx$shock_policy$gaul1_code <- area
+  p <- fx$pipeline
+  plan <- sp_shock_plan(fx$spec, p$weather_exposure$table, fx$shock_policy[[SP_ELIGIBLE_COL]],
+    fx$shock_policy, "hh", hist_pipeline = p, is_log = FALSE, seed = 5L,
+    hist_exposure_map = p$weather_exposure, pov_line = 1.5)
+  ref <- rep(NA_real_, 12)
+  m <- tapply(p$y_point, p$svy_row_id, mean)
+  ref[as.integer(names(m))] <- m
+  col <- .sp_impact_column(plan$impact, p, p$weather_exposure, ref)
+  for (a in c("A", "B")) for (yr in unique(p$sim_year)) {
+    i <- area[p$svy_row_id] == a & p$sim_year == yr
+    expect_equal(unique(col[p$weather_exposure$row_index[i]]),
+      -100 * sum(p$weight[i] * (p$y_point[i] / ref[p$svy_row_id[i]] - 1)) / sum(p$weight[i]))
+  }
+  # No area column in the run, or too few households for a poverty rate
+  bare <- shk_fixture("none", shk_impact_spec(level = "admin1"))
+  expect_error(shk_impact_plan(bare, bare$spec), "gaul1_code", class = "sp_trigger_problem")
+  expect_error(sp_shock_plan(utils::modifyList(fx$spec, list(trigger_metric = "poverty_rate")),
+    p$weather_exposure$table, fx$shock_policy[[SP_ELIGIBLE_COL]], fx$shock_policy, "hh",
+    hist_pipeline = p, is_log = FALSE, hist_exposure_map = p$weather_exposure, pov_line = 1.5),
+    "sampled households", class = "sp_trigger_problem")
+  expect_null(.sp_shock_problem(utils::modifyList(fx$spec, list(trigger_level = "admin2"))))
+})
+
+
+test_that("a threshold at the historical minimum gives a cell no adverse tail", {
+  tbl <- data.frame(code = "X", year = "2020", survname = "s", loc_id = 1L, int_month = 1L,
+    sim_year = 1:20, .impact_metric = c(rep(0, 18), 5, 8))
+  spec <- list(trigger_metric = "poverty_rate", trigger_type = "return_period",
+    trigger_return_period_years = 5, trigger_direction = "above")
+  # The 1-in-5 level is 0, the historical minimum: it would fire every year
+  expect_error(sp_trigger_thresholds(tbl, spec), "no adverse tail", class = "sp_trigger_problem")
+  spec$trigger_return_period_years <- 20
+  expect_equal(sp_trigger_thresholds(tbl, spec)$table$threshold, 5.15)
+  # A continuous metric is unaffected
+  tbl$.impact_metric <- seq(0.5, 10, by = 0.5)
+  spec$trigger_return_period_years <- 5
+  expect_gt(sp_trigger_thresholds(tbl, spec)$table$threshold, 0.5)
+})
+
+test_that("the impact level choices follow the survey columns", {
+  expect_identical(unname(.sp_impact_level_choices(NULL)), c("national", "admin1", "admin2", "location"))
+  svy <- data.frame(loc_id = 1:4, gaul1_code = c("a", "a", "b", "b"), gaul2_code = "x")
+  expect_identical(unname(.sp_impact_level_choices(svy)), c("national", "admin1", "location"))
+  svy$gaul2_code <- c("x", "y", "z", NA)
+  expect_identical(unname(.sp_impact_level_choices(svy)), c("national", "admin1", "admin2", "location"))
+  expect_identical(unname(.sp_impact_level_choices(svy["loc_id"])), c("national", "location"))
+  expect_identical(unname(.sp_impact_level_choices(svy[0, ])), "national")
+})

@@ -1659,6 +1659,8 @@ apply_policy_to_svy <- function(svy,
 #'   needs `SP_ELIGIBLE_COL` on `svy_policy`.
 #' @param analysis_unit `"hh"`, `"ind"` or `"firm"`; used for the shock
 #'   transfer arithmetic.
+#' @param seed Base seed of the run (the predicted-welfare layer of a
+#'   shock-responsive scenario draws its errors from it).
 #'
 #' @return Named list with \code{hist_sim} and \code{saved_scenarios} on the
 #'   Step 2 schema, prepared \code{annual_channels}, compact future
@@ -1680,7 +1682,8 @@ apply_policy_delta_to_baseline <- function(svy_baseline,
                                            annual_channels = NULL,
                                            chunk_size = 100000L,
                                            sp = NULL,
-                                           analysis_unit = "hh") {
+                                           analysis_unit = "hh",
+                                           seed = WISEAPP_DEFAULT_SEED) {
   if (is.null(svy_baseline) || is.null(svy_policy) ||
     is.null(model_fit) || is.null(so) ||
     is.null(hist_sim_baseline)) {
@@ -1707,14 +1710,17 @@ apply_policy_delta_to_baseline <- function(svy_baseline,
   # the per-household transfer, once per run; the annual correction evaluates
   # the trigger per pipeline from this plain-data plan.
   shock_plan <- if (identical(sp$sp_type, "shock") && SP_ELIGIBLE_COL %in% names(svy_policy)) {
+    hist_exposure <- step2_exposure_resolve(hist_sim_baseline$pipeline, hist_sim_baseline)
     sp_shock_plan(
-      sp, step2_exposure_resolve(hist_sim_baseline$pipeline, hist_sim_baseline)$table,
+      sp, hist_exposure$table,
       svy_policy[[SP_ELIGIBLE_COL]], svy_policy, analysis_unit,
       hist_pipeline = hist_sim_baseline$pipeline,
       is_log = identical(so$transform %||% "", "log"),
       level_factor = outcome_level_scale(
         rep(1, nrow(svy_policy)), so, .outcome_ppp(svy_policy)
-      )
+      ),
+      seed = seed, hist_exposure_map = hist_exposure,
+      pov_line = hist_sim_baseline$pov_line
     )
   }
   annual_channels <- annual_channels %||% .prepare_policy_annual_channels(

@@ -187,6 +187,18 @@ mod_3_01_sp_server <- function(id,
       stats::setNames(cols, labels)
     })
 
+    # Offer only the impact levels the survey frame supports (P2-5); keep the
+    # current choice when it is still offered.
+    observe({
+      svy <- tryCatch(hist_sim()$svy, error = function(e) NULL)
+      choices <- .sp_impact_level_choices(svy)
+      current <- shiny::isolate(input$trigger_level)
+      updateSelectInput(
+        session, "trigger_level", choices = choices,
+        selected = if (!is.null(current) && current %in% choices) current else "national"
+      )
+    })
+
     output$sp_trigger_ui <- renderUI({
       cands <- trigger_candidates()
       conditionalPanel(
@@ -217,6 +229,67 @@ mod_3_01_sp_server <- function(id,
                 "differ. Quantile-based welfare effects (RIF) do not respond to the",
                 "payment."
               ),
+              selectInput(
+                ns("trigger_metric"),
+                label = tags$span(
+                  tags$i(class = "fa fa-ruler me-1"),
+                  "Trigger measures",
+                  info_popover(
+                    title = "What the trigger measures",
+                    tags$p(
+                      tags$b("Weather variable:"), "a hazard index, as in the",
+                      "response check below."
+                    ),
+                    tags$p(
+                      tags$b("Impact:"), "modelled welfare loss, poverty rate or number",
+                      "of poor, read from the central predictions of the year, nationally",
+                      "or per survey location (interview months pooled). The threshold",
+                      "comes from the historical years and is applied unchanged to climate",
+                      "members. A real program would need an impact estimate this timely,",
+                      "so read it as a benchmark. Loss is the percent of the households'",
+                      "own typical welfare. Poverty needs the Step 2 poverty line, and per",
+                      "location at least", SP_IMPACT_MIN_HH, "sampled households per",
+                      "location. For a return period the poverty rate and the number of",
+                      "poor give the same years."
+                    )
+                  )
+                ),
+                choices = c(
+                  "Weather variable" = "weather",
+                  "Modelled welfare loss (%)" = "loss",
+                  "Poverty rate (%)" = "poverty_rate",
+                  "Number of poor (people)" = "poor_count"
+                ),
+                selected = "weather"
+              ),
+              conditionalPanel(
+                condition = paste0("input['", ns("trigger_metric"), "'] != 'weather'"),
+                selectInput(
+                  ns("trigger_level"),
+                  label = tags$span(
+                    "Read at",
+                    info_popover(
+                      title = "Impact level",
+                      tags$p(
+                        "National uses one series. Administrative levels use the GAUL",
+                        "codes in the survey data; only the levels the data supports",
+                        "are listed. A survey location is a sampling cluster, too",
+                        "small for a reliable poverty rate."
+                      )
+                    )
+                  ),
+                  choices = c(
+                    "National" = "national", "Administrative level 1" = "admin1",
+                    "Administrative level 2" = "admin2", "Survey location" = "location"
+                  ),
+                  selected = "national"
+                ),
+                tags$p(
+                  class = "text-muted small",
+                  "Pays when the metric is at or above the threshold (more loss or",
+                  "more poor is adverse)."
+                )
+              ),
               pill_toggle(
                 inputId = ns("trigger_type"),
                 label = "Trigger on",
@@ -224,6 +297,8 @@ mod_3_01_sp_server <- function(id,
                 choices = c("Weather level" = "weather", "Return period" = "return_period"),
                 selected = "weather"
               ),
+              conditionalPanel(
+                condition = paste0("input['", ns("trigger_metric"), "'] == 'weather'"),
               selectInput(
                 ns("trigger_variable"),
                 label = tags$span(
@@ -254,11 +329,15 @@ mod_3_01_sp_server <- function(id,
                   "Either end" = "either"
                 ),
                 selected = "above"
+              )
               ),
               conditionalPanel(
                 condition = paste0("input['", ns("trigger_type"), "'] != 'return_period'"),
                 conditionalPanel(
-                  condition = paste0("input['", ns("trigger_direction"), "'] == 'either'"),
+                  condition = paste0(
+                    "input['", ns("trigger_direction"), "'] == 'either' && input['",
+                    ns("trigger_metric"), "'] == 'weather'"
+                  ),
                   numericInput(
                     ns("trigger_value_low"),
                     label = tags$span(
@@ -361,6 +440,74 @@ mod_3_01_sp_server <- function(id,
                   min = 5, max = 100, value = 20, step = 5, post = "%"
                 )
               ),
+              selectInput(
+                ns("dyn_geo"),
+                label = tags$span(
+                  tags$i(class = "fa fa-location-crosshairs me-1"),
+                  "Within triggered locations",
+                  info_popover(
+                    title = "Worst-affected locations",
+                    tags$p(
+                      "Added on top of the targeting rule and the payout scope.",
+                      "\"Worst-affected share\" pays only the most severe triggered",
+                      "locations of each year, ranked by how far the weather passes the",
+                      "trigger in units of the location's own historical standard",
+                      "deviation, until the chosen share of the triggered population",
+                      "is covered. Not available when all targeted households are paid."
+                    )
+                  )
+                ),
+                choices = c(
+                  "All triggered locations" = "all",
+                  "Worst-affected share" = "worst_share"
+                ),
+                selected = "all"
+              ),
+              conditionalPanel(
+                condition = paste0("input['", ns("dyn_geo"), "'] == 'worst_share'"),
+                sliderInput(
+                  ns("dyn_geo_pct"),
+                  label = "Triggered population paid (%)",
+                  min = 5, max = 100, value = 50, step = 5, post = "%"
+                )
+              ),
+              checkboxInput(
+                ns("dyn_welfare"),
+                label = tags$span(
+                  "Also select on predicted welfare at the trigger",
+                  info_popover(
+                    title = "Predicted welfare (oracle)",
+                    tags$p(
+                      "A household is selected when the model's prediction of its own",
+                      "welfare in that year is at or below the chosen share of the",
+                      "households' historical mean welfare distribution (fixed for the",
+                      "run). This knows each household's modelled welfare in the shock",
+                      "year, which a real registry would not: read the result as an",
+                      "upper bound and use larger error rates. Errors are drawn per",
+                      "household and year with the run seed, the same in every scenario."
+                    )
+                  )
+                ),
+                value = FALSE
+              ),
+              conditionalPanel(
+                condition = paste0("input['", ns("dyn_welfare"), "']"),
+                sliderInput(
+                  ns("dyn_welfare_pct"),
+                  label = "Poorest at the trigger (bottom x%)",
+                  min = 5, max = 60, value = 20, step = 5, post = "%"
+                ),
+                sliderInput(
+                  ns("dyn_incl_error_pct"),
+                  label = "Inclusion error at the trigger (%)",
+                  min = 0, max = 50, value = 20, step = 5, post = "%"
+                ),
+                sliderInput(
+                  ns("dyn_excl_error_pct"),
+                  label = "Exclusion error at the trigger (%)",
+                  min = 0, max = 50, value = 20, step = 5, post = "%"
+                )
+              ),
               sliderInput(
                 ns("payments_per_activation"),
                 label = tags$span(
@@ -410,10 +557,15 @@ mod_3_01_sp_server <- function(id,
       if (!is.null(problem)) {
         return(problem)
       }
-      either <- identical(spec$trigger_direction, "either")
+      trig <- .sp_spec_trigger(spec)
+      impact_label <- c(
+        loss = "modelled loss (%)", poverty_rate = "poverty rate (%)",
+        poor_count = "number of poor"
+      )[spec[["trigger_metric"]]]
+      either <- identical(trig$direction, "either")
       side <- if (either) {
         "beyond"
-      } else if (identical(spec$trigger_direction, "below")) {
+      } else if (identical(trig$direction, "below")) {
         "at or below"
       } else {
         "at or above"
@@ -428,9 +580,22 @@ mod_3_01_sp_server <- function(id,
       } else {
         paste(spec$trigger_value)
       }
+      layers <- c(
+        if (identical(spec[["dyn_geo"]], "worst_share")) {
+          paste0("worst-affected ", spec$dyn_geo_pct, "% of triggered population")
+        },
+        if (isTRUE(spec[["dyn_welfare"]])) {
+          paste0("poorest ", spec$dyn_welfare_pct, "% by predicted welfare")
+        }
+      )
       paste0(
-        spec$trigger_variable, " ", side, " ", level, "; ",
-        spec$payments_per_activation, " payment(s)"
+        if (is.na(impact_label)) {
+          spec$trigger_variable
+        } else {
+          paste0(impact_label, ", ", spec[["trigger_level"]])
+        }, " ", side, " ", level, "; ",
+        spec$payments_per_activation, " payment(s)",
+        if (length(layers)) paste0("; ", paste(layers, collapse = ", "))
       )
     })
 
@@ -522,6 +687,9 @@ mod_3_01_sp_server <- function(id,
     output$trigger_support <- renderText({
       tbl <- hist_exposure()$table
       var <- input$trigger_variable
+      if (!identical(input$trigger_metric %||% "weather", "weather")) {
+        return("")
+      }
       if (is.null(tbl) || is.null(var) || !var %in% names(tbl) ||
         !"sim_year" %in% names(tbl)) {
         return("")
@@ -1174,11 +1342,20 @@ mod_3_01_sp_server <- function(id,
         trigger_return_period_years = suppressWarnings(
           as.numeric(input$trigger_return_period_years %||% NA_real_)
         ),
+        trigger_metric = input$trigger_metric %||% "weather",
+        trigger_level = input$trigger_level %||% "national",
         payout_scope = input$payout_scope %||% "local",
         national_k_pct = suppressWarnings(
           as.numeric(input$national_k_pct %||% 0)
         ),
         payments_per_activation = input$payments_per_activation %||% 1L,
+        # Layered dynamic targeting (shock only)
+        dyn_geo = input$dyn_geo %||% "all",
+        dyn_geo_pct = suppressWarnings(as.numeric(input$dyn_geo_pct %||% 50)),
+        dyn_welfare = isTRUE(input$dyn_welfare),
+        dyn_welfare_pct = suppressWarnings(as.numeric(input$dyn_welfare_pct %||% 20)),
+        dyn_incl_error_pct = suppressWarnings(as.numeric(input$dyn_incl_error_pct %||% 20)),
+        dyn_excl_error_pct = suppressWarnings(as.numeric(input$dyn_excl_error_pct %||% 20)),
         # Budget rule and annual cap (shock only; blank cap = none)
         budget_rule = input$budget_rule %||% "fixed",
         loss_share_pct = suppressWarnings(as.numeric(input$loss_share_pct %||% NA_real_)),

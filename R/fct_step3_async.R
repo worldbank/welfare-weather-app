@@ -293,7 +293,8 @@ step3_compute <- function(svy, hs, ss, mf,
     decomp_context = decomp_context,
     run_identity = decomp_context$run_identity,
     sp = sp_cfg,
-    analysis_unit = analysis_unit
+    analysis_unit = analysis_unit,
+    seed = seed
   )
   if (is.null(pol_out)) {
     stop("Policy simulation produced no results.", call. = FALSE)

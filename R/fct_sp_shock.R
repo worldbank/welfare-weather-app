@@ -10,6 +10,20 @@ SP_TRIGGER_TYPES <- c("weather", "return_period")
 SP_TRIGGER_DIRECTIONS <- c("above", "below", "either")
 SP_PAYOUT_SCOPES <- c("local", "national_triggered", "national_all")
 SP_BUDGET_RULES <- c("fixed", "loss_share")
+SP_DYN_GEO <- c("all", "worst_share")
+# What the trigger measures: a weather variable, or an impact computed from the
+# central predictions (P2-5). Impact metrics are read at national level or per
+# survey location (interview months pooled) and always fire on high values:
+# `loss` is percent of the households' own typical welfare (positive = loss),
+# `poverty_rate` percent, `poor_count` survey-weight people.
+SP_TRIGGER_METRICS <- c("weather", "loss", "poverty_rate", "poor_count")
+SP_TRIGGER_LEVELS <- c("location", "national", "admin1", "admin2")
+# Survey columns behind the administrative levels (GAUL 2024 codes)
+SP_IMPACT_GEO_COLS <- c(admin1 = "gaul1_code", admin2 = "gaul2_code")
+SP_IMPACT_COL <- ".impact_metric"
+# A poverty metric at survey-location level needs this many sampled households
+# in the location-year, or the rate is a step function (P2-0b)
+SP_IMPACT_MIN_HH <- 30L
 
 # A trigger is evaluated per survey round, survey location and interview month.
 .sp_trigger_key_cols <- c("code", "year", "survname", "loc_id", "int_month")
@@ -40,11 +54,19 @@ SP_BUDGET_RULES <- c("fixed", "loss_share")
   if (!type %in% SP_TRIGGER_TYPES) {
     return("Choose a trigger type.")
   }
+  metric <- sp[["trigger_metric"]] %||% "weather"
+  if (!metric %in% SP_TRIGGER_METRICS) {
+    return("Choose what the trigger measures.")
+  }
+  impact <- !identical(metric, "weather")
+  if (impact && !(sp[["trigger_level"]] %||% "location") %in% SP_TRIGGER_LEVELS) {
+    return("Choose whether the impact is read nationally or per survey location.")
+  }
   var <- sp$trigger_variable %||% NA_character_
-  if (length(var) != 1L || is.na(var) || !nzchar(var)) {
+  if (!impact && (length(var) != 1L || is.na(var) || !nzchar(var))) {
     return("Choose a weather variable for the trigger.")
   }
-  direction <- sp$trigger_direction %||% "above"
+  direction <- if (impact) "above" else sp$trigger_direction %||% "above"
   if (!direction %in% SP_TRIGGER_DIRECTIONS) {
     return("Choose whether the trigger fires above, below or at either extreme.")
   }
@@ -93,6 +115,37 @@ SP_BUDGET_RULES <- c("fixed", "loss_share")
   cap <- num(sp$annual_cap)
   if (!is.na(cap) && (!is.finite(cap) || cap <= 0)) {
     return("The annual cap must be above 0, or left blank for no cap.")
+  }
+  .sp_dyn_problem(sp, scope)
+}
+
+# Checks of the dynamic targeting layers (P2-8); NULL when valid or both off.
+.sp_dyn_problem <- function(sp, scope) {
+  num <- function(x) suppressWarnings(as.numeric(x %||% NA_real_))[1L]
+  geo <- sp[["dyn_geo"]] %||% "all"
+  if (!geo %in% SP_DYN_GEO) {
+    return("Choose where payments go within the triggered locations.")
+  }
+  if (identical(geo, "worst_share")) {
+    p <- num(sp$dyn_geo_pct)
+    if (!is.finite(p) || p <= 0 || p > 100) {
+      return("Enter a worst-affected share between 0 and 100 percent.")
+    }
+    if (identical(scope, "national_all")) {
+      return("Paying all targeted households cannot be limited to the worst-affected locations.")
+    }
+  }
+  if (isTRUE(sp[["dyn_welfare"]])) {
+    p <- num(sp$dyn_welfare_pct)
+    if (!is.finite(p) || p <= 0 || p >= 100) {
+      return("Enter a predicted-welfare cutoff between 0 and 100 percent.")
+    }
+    for (f in c("dyn_incl_error_pct", "dyn_excl_error_pct")) {
+      e <- num(sp[[f]] %||% 0)
+      if (!is.finite(e) || e < 0 || e > 100) {
+        return("Dynamic targeting error rates must be between 0 and 100 percent.")
+      }
+    }
   }
   NULL
 }
@@ -183,8 +236,9 @@ sp_trigger_thresholds <- function(hist_exposure, spec) {
     .sp_trigger_abort(problem)
   }
   type <- spec$trigger_type %||% "weather"
-  var <- spec$trigger_variable
-  direction <- spec$trigger_direction %||% "above"
+  trig <- .sp_spec_trigger(spec)
+  var <- trig$variable
+  direction <- trig$direction
   if (!var %in% .sp_trigger_variables(hist_exposure)) {
     .sp_trigger_abort(paste0(
       "The trigger variable '", var, "' is not a continuous weather variable ",
@@ -230,6 +284,22 @@ sp_trigger_thresholds <- function(hist_exposure, spec) {
   }
   if (either) {
     tbl$threshold_low[ok] <- vapply(vals[ok], quant, numeric(1), p = 1 / n_tail)
+  }
+  if (identical(var, SP_IMPACT_COL)) {
+    # A discrete impact (a poverty rate of 0 in most years) can have a threshold
+    # equal to its historical minimum, which would fire in every year: such a
+    # cell has no adverse tail and never fires
+    lowest <- vapply(vals, function(v) suppressWarnings(min(v[is.finite(v)])), numeric(1))
+    flat <- tbl$supported & tbl$threshold <= unname(lowest)
+    tbl$supported[flat] <- FALSE
+    tbl$threshold[flat] <- NA_real_
+    if (any(flat) && !any(tbl$supported)) {
+      .sp_trigger_abort(paste0(
+        "The 1-in-", format(n_req), " level of the impact metric equals its lowest ",
+        "historical value everywhere, so there is no adverse tail to trigger on. ",
+        "Use a longer return period or a threshold value."
+      ))
+    }
   }
   if (!any(tbl$supported)) {
     .sp_trigger_abort(paste0(
@@ -281,15 +351,10 @@ sp_trigger_state <- function(exposure, thresholds, weights = NULL, spec) {
   )
 }
 
-# Which exposure rows pass the trigger. Works on any frame that carries the
-# trigger variable (and the threshold keys), so a pipeline can evaluate its
-# small exposure table once and index the result by prediction row.
-.sp_trigger_exceeds <- function(exposure, thresholds) {
+# Trigger limits per exposure row: the common value (weather level) or the
+# cell's threshold (return period), and the low limit for "either end".
+.sp_trigger_limits <- function(exposure, thresholds) {
   n <- nrow(exposure)
-  if (!thresholds$variable %in% names(exposure)) {
-    stop("The exposure needs `sim_year` and the trigger variable.", call. = FALSE)
-  }
-  value <- as.numeric(exposure[[thresholds$variable]])
   either <- identical(thresholds$direction, "either")
   low <- NULL
   limit <- if (identical(thresholds$type, "weather")) {
@@ -300,24 +365,38 @@ sp_trigger_state <- function(exposure, thresholds, weights = NULL, spec) {
     if (!all(keys %in% names(exposure))) {
       stop("The exposure lacks the threshold key columns.", call. = FALSE)
     }
-    chr <- function(df) {
-      df <- as.data.frame(df)[keys]
-      df[] <- lapply(df, as.character)
-      df
-    }
-    th <- chr(thresholds$table)
+    th <- .sp_key_chr(thresholds$table, keys)
     th$threshold <- thresholds$table$threshold
     if (either) th$threshold_low <- thresholds$table$threshold_low
-    joined <- dplyr::left_join(chr(exposure), th, by = keys)
+    joined <- dplyr::left_join(.sp_key_chr(exposure, keys), th, by = keys)
     if (either) low <- joined$threshold_low
     joined$threshold
   }
-  exceeds <- if (either) {
-    value >= limit | value <= low
+  list(limit = limit, low = low)
+}
+
+# Key columns as character, for joins between exposure and threshold tables.
+.sp_key_chr <- function(df, keys) {
+  df <- as.data.frame(df)[keys]
+  df[] <- lapply(df, as.character)
+  df
+}
+
+# Which exposure rows pass the trigger. Works on any frame that carries the
+# trigger variable (and the threshold keys), so a pipeline can evaluate its
+# small exposure table once and index the result by prediction row.
+.sp_trigger_exceeds <- function(exposure, thresholds) {
+  if (!thresholds$variable %in% names(exposure)) {
+    stop("The exposure needs `sim_year` and the trigger variable.", call. = FALSE)
+  }
+  value <- as.numeric(exposure[[thresholds$variable]])
+  lim <- .sp_trigger_limits(exposure, thresholds)
+  exceeds <- if (identical(thresholds$direction, "either")) {
+    value >= lim$limit | value <= lim$low
   } else if (identical(thresholds$direction, "above")) {
-    value >= limit
+    value >= lim$limit
   } else {
-    value <= limit
+    value <= lim$limit
   }
   exceeds[is.na(exceeds)] <- FALSE
   exceeds
@@ -420,23 +499,52 @@ sp_dynamic_transfer <- function(state, eligibility, spec, svy, analysis_unit = "
 #' @param eligibility Logical per survey row (`SP_ELIGIBLE_COL`).
 #' @param svy Survey frame of the run (see `sp_dynamic_transfer()`).
 #' @param analysis_unit `"hh"`, `"ind"` or `"firm"`.
+#' @param hist_pipeline,is_log,level_factor Historical pipeline, whether the
+#'   outcome is logged and the outcome level scale (modelled-loss reference).
+#' @param seed Base seed of the run (dynamic targeting draws).
+#' @param hist_exposure_map,pov_line Resolved exposure of the historical
+#'   pipeline (`table`, `row_index`) and the Step 2 poverty line; needed by an
+#'   impact trigger (`trigger_metric` other than `"weather"`).
 #' @return A list with `spec` (trigger and scope fields), `thresholds` and
 #'   `per_household`.
 #' @keywords internal
 sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit = "hh",
-                          hist_pipeline = NULL, is_log = FALSE, level_factor = NULL) {
+                          hist_pipeline = NULL, is_log = FALSE, level_factor = NULL,
+                          seed = WISEAPP_DEFAULT_SEED, hist_exposure_map = NULL,
+                          pov_line = NULL) {
   loss_pct <- suppressWarnings(as.numeric(spec$loss_event_pct %||% 10))[1L]
   admin_share <- .sp_admin_share(spec)
   cost_frame <- as.data.frame(svy)[intersect(c("weight", "hhsize", "ppp2021"), names(svy))]
   cap <- suppressWarnings(as.numeric(spec$annual_cap %||% NA_real_))[1L]
   rule <- spec$budget_rule %||% "fixed"
+  reference <- if (is.null(hist_pipeline)) NULL else {
+    sp_shock_reference(hist_pipeline, nrow(svy), is_log)
+  }
+  # Impact trigger (P2-5): the metric of the historical pipeline becomes a
+  # column of the exposure table, so thresholds, record rule, state and the
+  # severity ranking are the weather trigger's own code
+  impact <- .sp_impact_plan(
+    spec, hist_pipeline, hist_exposure_map, reference, is_log, pov_line, svy
+  )
+  if (!is.null(impact)) {
+    hist_exposure <- as.data.frame(hist_exposure)
+    hist_exposure[[SP_IMPACT_COL]] <- impact$hist_column
+    impact$n_years <- length(unique(
+      hist_pipeline$sim_year[is.finite(impact$hist_column[hist_exposure_map$row_index])]
+    ))
+    impact$hist_column <- NULL
+  }
+  thresholds <- sp_trigger_thresholds(hist_exposure, spec)
   list(
     spec = spec[intersect(names(spec), c(
       "trigger_type", "trigger_variable", "trigger_direction", "trigger_value",
       "trigger_value_low",
       "trigger_return_period_years", "payout_scope", "national_k_pct"
     ))],
-    thresholds = sp_trigger_thresholds(hist_exposure, spec),
+    thresholds = thresholds,
+    impact = impact,
+    # Layered dynamic targeting (P2-8); NULL leaves the Phase 1 payout scope
+    dyn = .sp_dyn_plan(spec, hist_exposure, thresholds, reference, cost_frame, seed),
     per_household = .sp_dynamic_per_household(eligibility, spec, svy, analysis_unit),
     # Run outputs (P1-7): cost arithmetic and the modelled-loss reference
     cost_frame = cost_frame,
@@ -456,10 +564,279 @@ sp_shock_plan <- function(spec, hist_exposure, eligibility, svy, analysis_unit =
     level_factor = level_factor,
     loss_event_pct = if (is.finite(loss_pct) && loss_pct > 0) loss_pct else 10,
     is_log = isTRUE(is_log),
-    reference = if (is.null(hist_pipeline)) NULL else {
-      sp_shock_reference(hist_pipeline, nrow(svy), is_log)
-    }
+    reference = reference
   )
+}
+
+# Impact levels a survey frame supports, as select choices: national always;
+# an administrative level when its GAUL column has at least two distinct
+# non-missing codes; the survey location when `loc_id` is present. Without a
+# frame, every level is offered (the plan reports a missing column).
+.sp_impact_level_choices <- function(svy) {
+  all <- c(
+    "National" = "national", "Administrative level 1" = "admin1",
+    "Administrative level 2" = "admin2", "Survey location" = "location"
+  )
+  if (!is.data.frame(svy)) {
+    return(all)
+  }
+  varies <- function(col) col %in% names(svy) && length(unique(stats::na.omit(svy[[col]]))) > 1L
+  keep <- c(
+    TRUE, varies(SP_IMPACT_GEO_COLS[["admin1"]]), varies(SP_IMPACT_GEO_COLS[["admin2"]]),
+    varies("loc_id")
+  )
+  all[keep]
+}
+
+# Trigger variable and direction a spec evaluates: the chosen weather variable
+# and direction, or the impact column, which always fires on high values.
+.sp_spec_trigger <- function(spec) {
+  if (!identical(spec[["trigger_metric"]] %||% "weather", "weather")) {
+    list(variable = SP_IMPACT_COL, direction = "above")
+  } else {
+    list(variable = spec$trigger_variable, direction = spec$trigger_direction %||% "above")
+  }
+}
+
+# Plan part of an impact trigger (P2-5); NULL for a weather trigger. Everything
+# the metric needs besides the pipeline: the household reference (rule 7), the
+# Step 2 poverty line (rule 15: fixed per run, "not available" without one) and
+# the level. `hist_column` is the metric of the historical pipeline, one value
+# per exposure table row, for the thresholds.
+.sp_impact_plan <- function(spec, hist_pipeline, hist_exposure_map, reference, is_log, pov_line,
+                            svy = NULL) {
+  metric <- spec[["trigger_metric"]] %||% "weather"
+  if (identical(metric, "weather")) {
+    return(NULL)
+  }
+  poverty <- metric %in% c("poverty_rate", "poor_count")
+  line <- suppressWarnings(as.numeric(pov_line))[1L]
+  if (poverty && !(is.finite(line) && line > 0)) {
+    .sp_trigger_abort("A trigger on poverty is not available: Step 2 has no poverty line.")
+  }
+  if (is.null(reference) || is.null(hist_exposure_map)) {
+    .sp_trigger_abort("An impact trigger needs the historical predictions and exposure.")
+  }
+  level <- spec[["trigger_level"]] %||% "location"
+  geo <- NULL
+  if (level %in% names(SP_IMPACT_GEO_COLS)) {
+    col_name <- SP_IMPACT_GEO_COLS[[level]]
+    if (!is.data.frame(svy) || !col_name %in% names(svy)) {
+      .sp_trigger_abort(paste0(
+        "The survey data of this run has no '", col_name, "' (",
+        sub("admin", "administrative level ", level),
+        "). Use another level."
+      ))
+    }
+    geo <- as.character(svy[[col_name]])
+  }
+  cfg <- list(
+    metric = metric, level = level, geo = geo,
+    pov_line = if (poverty) line, is_log = isTRUE(is_log)
+  )
+  col <- .sp_impact_column(cfg, hist_pipeline, hist_exposure_map, reference)
+  if (!any(is.finite(col))) {
+    .sp_trigger_abort(if (poverty && !identical(level, "national")) {
+      paste0(
+        "No ", if (identical(level, "location")) "survey location" else "area",
+        " has ", SP_IMPACT_MIN_HH, " sampled households, ",
+        "too few to read a poverty rate. Use a larger area or the national level."
+      )
+    } else {
+      "The impact metric has no finite value in the historical record."
+    })
+  }
+  c(cfg, list(hist_column = col))
+}
+
+# The impact metric of one pipeline, one value per exposure table row (`NA` for
+# rows no prediction row refers to). Per (unit, simulation year), where the unit
+# is the whole sample, a survey location (interview months pooled) or an
+# administrative area (`gaul1_code`, `gaul2_code`): `loss` is minus the survey-weighted mean of level / reference - 1 in percent (rule 7: level
+# scale, no residual draws), `poverty_rate` the weighted percent of households
+# below the line, `poor_count` their summed weight. Poverty below national level is
+# `NA` below `SP_IMPACT_MIN_HH` sampled households. Sums are keyed by unit and
+# year, so the result does not depend on row order.
+.sp_impact_column <- function(cfg, pipeline, exposure, reference) {
+  tbl <- exposure$table
+  g <- as.integer(exposure$row_index)
+  ids <- as.integer(pipeline$svy_row_id)
+  w <- if (is.null(pipeline$weight)) rep(1, length(ids)) else as.numeric(pipeline$weight)
+  w[!is.finite(w) | w < 0] <- 0
+  y <- as.numeric(pipeline$y_point)
+  level <- if (isTRUE(cfg$is_log)) exp(y) else y
+  rel <- level / reference[ids] - 1
+  ok <- is.finite(rel) & w > 0
+  poverty <- cfg$metric %in% c("poverty_rate", "poor_count")
+  if (poverty) {
+    ok <- ok & is.finite(level)
+  }
+  unit <- if (identical(cfg$level, "national")) {
+    rep("all", length(g))
+  } else if (!is.null(cfg$geo)) {
+    cfg$geo[ids]
+  } else {
+    keys <- intersect(c("code", "year", "survname", "loc_id"), names(tbl))
+    do.call(paste, c(unname(lapply(tbl[keys], as.character)), list(sep = "\r")))[g]
+  }
+  key <- paste(unit, as.character(pipeline$sim_year), sep = "\n")
+  val <- cbind(
+    w = w, wr = w * ifelse(ok, rel, 0),
+    wp = if (poverty) w * ifelse(ok & level < cfg$pov_line, 1, 0) else 0,
+    n = 1
+  )
+  val[!ok, ] <- 0
+  sums <- rowsum(val, key)
+  metric <- switch(cfg$metric,
+    loss = -100 * sums[, "wr"] / sums[, "w"],
+    poverty_rate = 100 * sums[, "wp"] / sums[, "w"],
+    poor_count = sums[, "wp"]
+  )
+  metric[!is.finite(metric) | sums[, "w"] <= 0] <- NA_real_
+  if (poverty && !identical(cfg$level, "national")) {
+    metric[sums[, "n"] < SP_IMPACT_MIN_HH] <- NA_real_
+  }
+  out <- rep(NA_real_, nrow(tbl))
+  rows <- unique(g)
+  first <- match(rows, g)
+  out[rows] <- unname(metric[match(key[first], rownames(sums))])
+  out
+}
+
+# Plan part of the layered dynamic targeting (P2-8): NULL when both layers are
+# off, so the Phase 1 state is untouched. `geo_pct` is the worst-affected share
+# of the triggered population; `scale` holds each cell's historical standard
+# deviation of the trigger variable (the unit of the severity ranking).
+# `welfare_cut` is the weighted `dyn_welfare_pct` quantile of the households'
+# own historical mean outcome level, fixed per run.
+.sp_dyn_plan <- function(spec, hist_exposure, thresholds, reference, cost_frame, seed) {
+  num <- function(x) suppressWarnings(as.numeric(x))[1L]
+  geo <- identical(spec[["dyn_geo"]] %||% "all", "worst_share")
+  welfare <- isTRUE(spec[["dyn_welfare"]])
+  if (!geo && !welfare) {
+    return(NULL)
+  }
+  if (welfare && is.null(reference)) {
+    .sp_trigger_abort("Predicted-welfare targeting needs the historical predictions.")
+  }
+  list(
+    geo_pct = if (geo) num(spec$dyn_geo_pct) / 100,
+    scale = if (geo) .sp_trigger_cell_sd(hist_exposure, thresholds$variable),
+    welfare_cut = if (welfare) {
+      .sp_welfare_quantile(reference, cost_frame$weight, num(spec$dyn_welfare_pct) / 100)
+    },
+    incl = if (welfare) num(spec$dyn_incl_error_pct %||% 0) / 100,
+    excl = if (welfare) num(spec$dyn_excl_error_pct %||% 0) / 100,
+    seed = seed
+  )
+}
+
+# Historical standard deviation of the trigger variable per (survey round,
+# location, interview month) cell; `NA` with fewer than two finite years.
+.sp_trigger_cell_sd <- function(hist_exposure, variable) {
+  keys <- intersect(.sp_trigger_key_cols, names(hist_exposure))
+  grp <- do.call(paste, c(unname(as.list(hist_exposure[keys])), sep = "\r"))
+  first <- !duplicated(grp)
+  vals <- split(as.numeric(hist_exposure[[variable]]), factor(grp, levels = grp[first]))
+  tbl <- hist_exposure[first, keys, drop = FALSE]
+  rownames(tbl) <- NULL
+  tbl$sd <- unname(vapply(vals, function(v) {
+    v <- v[is.finite(v)]
+    if (length(v) > 1L) stats::sd(v) else NA_real_
+  }, numeric(1)))
+  tbl
+}
+
+# Severity of a triggered exposure row: depth beyond the trigger limit in units
+# of the cell's historical standard deviation, so cells with different
+# variability rank on one scale. Zero when the cell has no spread.
+.sp_trigger_severity <- function(exposure, thresholds, scale) {
+  value <- as.numeric(exposure[[thresholds$variable]])
+  lim <- .sp_trigger_limits(exposure, thresholds)
+  depth <- if (identical(thresholds$direction, "either")) {
+    pmax(value - lim$limit, lim$low - value)
+  } else if (identical(thresholds$direction, "above")) {
+    value - lim$limit
+  } else {
+    lim$limit - value
+  }
+  keys <- intersect(.sp_trigger_key_cols, names(scale))
+  sc <- .sp_key_chr(scale, keys)
+  sc$sd <- scale$sd
+  sd <- dplyr::left_join(.sp_key_chr(exposure, keys), sc, by = keys)$sd
+  out <- ifelse(is.finite(sd) & sd > 0, depth / sd, 0)
+  out[!is.finite(out)] <- 0
+  out
+}
+
+# Layered dynamic scope (P2-8): `static rule AND payout scope AND geography AND
+# predicted welfare`. Returns the `in_scope` rows that survive both layers.
+#
+# Geography: in each simulation year the triggered cells are ranked from the
+# most to the least severe (ties by cell key, so the order never depends on
+# row order) and paid while the cumulative population before the cell is below
+# `geo_pct` of the year's triggered population; a share of 100 % keeps all.
+#
+# Predicted welfare (an oracle: the model's own central prediction of the
+# household's welfare in that year): a household is selected when that level is
+# at or below the run's fixed cutoff. A selected household is dropped with
+# probability `excl`, an unselected one added with probability `incl`. The
+# uniform draw behind it is keyed by (survey row, simulation year) and shared
+# by all members, so a household has the same luck in every scenario and the
+# result never depends on row order or chunk size.
+.sp_dyn_scope <- function(plan, pipeline, exposure, tbl, exceeds_t, in_scope) {
+  dyn <- plan$dyn
+  keep <- rep(TRUE, length(in_scope))
+  if (!is.null(dyn$geo_pct)) {
+    g <- as.integer(exposure$row_index)
+    w <- if (is.null(pipeline$weight)) rep(1, length(g)) else as.numeric(pipeline$weight)
+    w[!is.finite(w) | w < 0] <- 0
+    pop <- numeric(nrow(tbl))
+    by_cell <- rowsum(w, g)
+    pop[as.integer(rownames(by_cell))] <- by_cell[, 1L]
+    # A cell belongs to one simulation year; read it from its prediction rows
+    year_t <- as.character(pipeline$sim_year[match(seq_len(nrow(tbl)), g)])
+    cand <- which(exceeds_t & pop > 0)
+    keep_t <- rep(FALSE, nrow(tbl))
+    if (length(cand)) {
+      sev <- .sp_trigger_severity(tbl[cand, , drop = FALSE], plan$thresholds, dyn$scale)
+      key <- do.call(paste, c(
+        unname(as.list(as.data.frame(tbl)[cand, intersect(.sp_trigger_key_cols, names(tbl)), drop = FALSE])),
+        list(sep = "\r")
+      ))
+      yr <- year_t[cand]
+      ord <- order(yr, -sev, key, cand, method = "radix")
+      cand <- cand[ord]
+      yr <- yr[ord]
+      cum_before <- stats::ave(pop[cand], yr, FUN = cumsum) - pop[cand]
+      total <- stats::ave(pop[cand], yr, FUN = sum)
+      keep_t[cand] <- cum_before < dyn$geo_pct * total
+    }
+    keep <- keep & keep_t[g]
+  }
+  if (!is.null(dyn$welfare_cut)) {
+    y <- as.numeric(pipeline$y_point)
+    level <- if (plan$is_log) exp(y) else y
+    ids <- as.integer(pipeline$svy_row_id)
+    u <- .sp_dyn_uniform(dyn$seed, pipeline$sim_year, ids, length(plan$reference))
+    poor <- level <= dyn$welfare_cut
+    pick <- ifelse(poor, u >= dyn$excl, u < dyn$incl)
+    keep <- keep & !is.na(pick) & pick & is.finite(level)
+  }
+  in_scope & keep
+}
+
+# One uniform per prediction row, keyed by (survey row, simulation year).
+.sp_dyn_uniform <- function(seed, year, ids, n_svy) {
+  u <- numeric(length(ids))
+  for (idx in split(seq_along(ids), as.character(year))) {
+    draw <- withr::with_seed(
+      wise_seed(seed, "policy", "sp-dynamic", as.character(year[idx[1L]])),
+      stats::runif(n_svy)
+    )
+    u[idx] <- draw[ids[idx]]
+  }
+  u
 }
 
 # Annual transfer cost, in the entry currency, of one unit of stored daily
@@ -606,12 +983,19 @@ sp_shock_pipeline_transfer <- function(plan, pipeline, exposure, state = NULL) {
 #' @return The list returned by `sp_trigger_state()`.
 #' @keywords internal
 sp_shock_pipeline_state <- function(plan, pipeline, exposure) {
-  exceeds <- .sp_trigger_exceeds(
-    as.data.frame(exposure$table), plan$thresholds
-  )[exposure$row_index]
-  c(list(exceeds = exceeds), .sp_trigger_scope(
+  tbl <- as.data.frame(exposure$table)
+  if (!is.null(plan$impact)) {
+    tbl[[SP_IMPACT_COL]] <- .sp_impact_column(plan$impact, pipeline, exposure, plan$reference)
+  }
+  exceeds_t <- .sp_trigger_exceeds(tbl, plan$thresholds)
+  exceeds <- exceeds_t[exposure$row_index]
+  state <- c(list(exceeds = exceeds), .sp_trigger_scope(
     exceeds, pipeline$sim_year, pipeline$weight, plan$spec
   )[c("in_scope", "share", "gate")])
+  if (!is.null(plan$dyn)) {
+    state$in_scope <- .sp_dyn_scope(plan, pipeline, exposure, tbl, exceeds_t, state$in_scope)
+  }
+  state
 }
 
 #' Run outputs of one pipeline, one row per simulation year
@@ -1097,7 +1481,8 @@ sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
         spec, exposure$table, eligible, svy, analysis_unit,
         hist_pipeline = pipeline,
         is_log = identical(hist_sim$so$transform %||% "", "log"),
-        level_factor = outcome_level_scale(rep(1, nrow(svy)), hist_sim$so, .outcome_ppp(svy))
+        level_factor = outcome_level_scale(rep(1, nrow(svy)), hist_sim$so, .outcome_ppp(svy)),
+        seed = seed, hist_exposure_map = exposure, pov_line = hist_sim$pov_line
       )
       state <- sp_shock_pipeline_state(plan, pipeline, exposure)
       transfer <- sp_shock_pipeline_transfer(plan, pipeline, exposure, state)
@@ -1123,7 +1508,7 @@ sp_shock_preview <- function(spec, hist_sim, svy, analysis_unit = "hh",
         },
         mean_exposed_share = mean(annual$exposed_share),
         n_years = n_years,
-        n_record_years = length(unique(exposure$table$sim_year[
+        n_record_years = plan$impact$n_years %||% length(unique(exposure$table$sim_year[
           is.finite(as.numeric(exposure$table[[spec$trigger_variable]]))
         ]))
       )
